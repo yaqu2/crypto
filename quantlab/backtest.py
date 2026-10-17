@@ -1,129 +1,146 @@
-"""Single-asset daily moving-average study with next-open execution.
-
-This is a research simulator, not an exchange or broker execution model.
-"""
+"""Point-in-time US equity momentum portfolio simulator; no live orders."""
 
 from __future__ import annotations
 
 import csv
 import hashlib
-import json
 import math
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 
 @dataclass(frozen=True)
 class Bar:
     day: date
+    symbol: str
     open: float
     close: float
+    adj_close: float
+    split_factor: float
+    dividend: float
+    eligible: bool
 
 
-def load_bars(path: Path) -> list[Bar]:
-    """Require a continuous UTC daily series; reject silent holes and bad prices."""
+def load_bars(path: Path) -> tuple[list[date], dict[date, dict[str, Bar]]]:
+    """Require explicit historical eligibility and raw/adjusted prices."""
+    columns = {"date", "symbol", "open", "close", "adj_close", "split_factor", "dividend", "eligible"}
+    data: dict[date, dict[str, Bar]] = {}
     with path.open(newline="", encoding="utf-8-sig") as source:
         reader = csv.DictReader(source)
-        if not reader.fieldnames or not {"date", "open", "close"}.issubset(reader.fieldnames):
-            raise ValueError("CSV must contain date,open,close columns")
-        bars = []
+        if not reader.fieldnames or not columns.issubset(reader.fieldnames):
+            raise ValueError("CSV requires date,symbol,open,close,adj_close,split_factor,dividend,eligible")
         for row in reader:
             try:
-                bar = Bar(date.fromisoformat(row["date"]), float(row["open"]), float(row["close"]))
-            except (TypeError, ValueError) as exc:
-                raise ValueError("invalid date or price in CSV") from exc
-            if not all(math.isfinite(price) and price > 0 for price in (bar.open, bar.close)):
-                raise ValueError("prices must be finite and positive")
-            if bars and bar.day != bars[-1].day + timedelta(days=1):
-                raise ValueError("dates must be strictly increasing with no missing UTC days")
-            bars.append(bar)
-    if not bars:
+                day = date.fromisoformat(row["date"])
+                symbol = row["symbol"].strip().upper()
+                prices = [float(row[name]) for name in ("open", "close", "adj_close", "split_factor", "dividend")]
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValueError("invalid date, symbol or price") from exc
+            if not symbol or any(not math.isfinite(x) for x in prices) or any(x <= 0 for x in prices[:4]) or prices[4] < 0:
+                raise ValueError("invalid symbol, price, split factor or dividend")
+            if row["eligible"] not in ("0", "1"):
+                raise ValueError("eligible must be 0 or 1 as of that session")
+            daily = data.setdefault(day, {})
+            if symbol in daily:
+                raise ValueError(f"duplicate symbol/session: {symbol} {day}")
+            daily[symbol] = Bar(day, symbol, *prices, row["eligible"] == "1")
+    if not data:
         raise ValueError("CSV has no bars")
-    return bars
+    return sorted(data), data
 
 
-def _stats(equity: list[float], trades: int, initial_cash: float) -> dict:
-    peak = equity[0]
-    drawdown = 0.0
-    for value in equity:
+def backtest(days: list[date], data: dict[date, dict[str, Bar]], *, lookback: int = 60,
+             top_n: int = 50, fee_bps: float = 10, slippage_bps: float = 5,
+             initial_cash: float = 5000) -> dict:
+    if lookback < 1 or top_n < 1 or len(days) < lookback + 2:
+        raise ValueError("need positive lookback/top_n and at least lookback + 2 sessions")
+    if not math.isfinite(initial_cash) or initial_cash <= 0 or any(
+        not math.isfinite(x) or x < 0 or x >= 10000 for x in (fee_bps, slippage_bps)
+    ):
+        raise ValueError("invalid cash or costs")
+    fee, slip = fee_bps / 10000, slippage_bps / 10000
+    cash = initial_cash
+    shares: dict[str, float] = {}
+    trades, daily = [], []
+    for i, day in enumerate(days):
+        bars = data[day]
+        selected: list[str] = []
+        if i >= lookback + 1:
+            previous, anchor = data[days[i - 1]], data[days[i - 1 - lookback]]
+            ranks = [(bar.adj_close / anchor[symbol].adj_close - 1, symbol)
+                     for symbol, bar in previous.items() if bar.eligible and symbol in anchor]
+            if len(ranks) < top_n:
+                raise ValueError(f"eligible historical universe has {len(ranks)} ranked symbols, below top_n={top_n}")
+            selected = [s for _, s in sorted(ranks, key=lambda pair: (-pair[0], pair[1]))[:top_n]]
+        missing = (set(shares) | set(selected)) - bars.keys()
+        if missing:
+            raise ValueError(f"missing current raw bar on {day}: {','.join(sorted(missing))}")
+        for symbol in shares:
+            shares[symbol] *= bars[symbol].split_factor
+        dividend_due = sum(qty * bars[s].dividend for s, qty in shares.items())
+        open_equity = cash + sum(qty * bars[s].open for s, qty in shares.items())
+        target = open_equity / len(selected) if selected else 0.0
+
+        def record(symbol: str, side: str, qty: float, price: float) -> None:
+            trades.append({"date": day.isoformat(), "symbol": symbol, "side": side,
+                           "shares": round(qty, 8), "fillPrice": round(price, 8),
+                           "fee": round(qty * price * fee, 8)})
+
+        for symbol in sorted(shares):
+            desired = target / bars[symbol].open if symbol in selected else 0.0
+            qty = max(0.0, shares[symbol] - desired)
+            if qty > 1e-12:
+                price = bars[symbol].open * (1 - slip)
+                cash += qty * price * (1 - fee)
+                shares[symbol] -= qty
+                record(symbol, "SELL", qty, price)
+        for symbol in selected:
+            price = bars[symbol].open * (1 + slip)
+            desired = target / bars[symbol].open
+            qty = min(max(0.0, desired - shares.get(symbol, 0.0)), cash / (price * (1 + fee)))
+            if qty > 1e-12:
+                cash -= qty * price * (1 + fee)
+                shares[symbol] = shares.get(symbol, 0.0) + qty
+                record(symbol, "BUY", qty, price)
+        shares = {s: qty for s, qty in shares.items() if qty > 1e-12}
+        cash += dividend_due  # ex-date cash is unavailable for opening orders
+        equity = cash + sum(qty * bars[s].close for s, qty in shares.items())
+        if i == len(days) - 1:
+            for symbol, qty in sorted(shares.items()):
+                price = bars[symbol].close * (1 - slip)
+                cash += qty * price * (1 - fee)
+                record(symbol, "SELL_FINAL_CLOSE", qty, price)
+            equity = cash
+        daily.append({"date": day.isoformat(), "selected": selected, "equity": round(equity, 6)})
+    curve = [row["equity"] for row in daily]
+    peak, drawdown = curve[0], 0.0
+    for value in curve:
         peak = max(peak, value)
         drawdown = max(drawdown, 1 - value / peak)
-    n = len(equity) - 1
-    total = equity[-1] / initial_cash - 1
+    total = curve[-1] / initial_cash - 1
+    elapsed = (days[-1] - days[0]).days
+    spy = [data[day].get("SPY") for day in days]
+    benchmark = round(spy[-1].adj_close / spy[0].adj_close - 1, 8) if all(spy) else None
     return {
-        "endingEquity": round(equity[-1], 6),
-        "totalReturn": round(total, 8),
-        "annualizedReturn": round((1 + total) ** (365 / n) - 1, 8) if n else None,
-        "maxDrawdown": round(drawdown, 8),
-        "orderCount": trades,
-    }
-
-
-def backtest(
-    bars: list[Bar], *, short: int = 10, long: int = 30,
-    fee_bps: float = 10, slippage_bps: float = 5,
-    initial_cash: float = 1000, baseline: bool = False,
-) -> dict:
-    if not (1 <= short < long and len(bars) >= long + 2):
-        raise ValueError("need 1 <= short < long and at least long + 2 daily bars")
-    if initial_cash <= 0 or not all(math.isfinite(x) and 0 <= x < 10000 for x in (fee_bps, slippage_bps)):
-        raise ValueError("cash and cost assumptions are invalid")
-    fee, slip = fee_bps / 10000, slippage_bps / 10000
-    cash, units, orders = initial_cash, 0.0, 0
-    curve = []
-    trades = []
-    for i, bar in enumerate(bars):
-        if baseline:
-            want_asset = i > 0
-        elif i >= long:
-            known = bars[:i]  # yesterday's close is the newest available signal
-            fast = sum(b.close for b in known[-short:]) / short
-            slow = sum(b.close for b in known[-long:]) / long
-            want_asset = fast > slow
-        else:
-            want_asset = False
-        if want_asset and cash > 0:
-            units = cash / (bar.open * (1 + slip) * (1 + fee))
-            fill = bar.open * (1 + slip)
-            trades.append({"date": bar.day.isoformat(), "side": "BUY", "fillPrice": round(fill, 8),
-                           "units": round(units, 8), "fee": round(units * fill * fee, 8)})
-            cash = 0.0
-            orders += 1
-        elif not want_asset and units > 0:
-            fill = bar.open * (1 - slip)
-            trades.append({"date": bar.day.isoformat(), "side": "SELL", "fillPrice": round(fill, 8),
-                           "units": round(units, 8), "fee": round(units * fill * fee, 8)})
-            cash += units * bar.open * (1 - slip) * (1 - fee)
-            units = 0.0
-            orders += 1
-        curve.append(cash + units * bar.close)
-    if units:
-        fill = bars[-1].close * (1 - slip)
-        trades.append({"date": bars[-1].day.isoformat(), "side": "SELL_FINAL_CLOSE",
-                       "fillPrice": round(fill, 8), "units": round(units, 8),
-                       "fee": round(units * fill * fee, 8)})
-        cash += units * bars[-1].close * (1 - slip) * (1 - fee)
-        orders += 1
-        curve[-1] = cash
-    return {
-        "period": {"start": bars[0].day.isoformat(), "end": bars[-1].day.isoformat(), "bars": len(bars)},
-        "parameters": {"short": short, "long": long, "feeBpsPerSide": fee_bps,
+        "period": {"start": days[0].isoformat(), "end": days[-1].isoformat(), "sessions": len(days)},
+        "parameters": {"lookbackSessions": lookback, "topN": top_n, "feeBpsPerSide": fee_bps,
                        "slippageBpsPerSide": slippage_bps, "initialCash": initial_cash},
-        "execution": "previous UTC close signal; next UTC open order; final close liquidation",
-        "result": _stats(curve, orders, initial_cash),
-        "trades": trades,
-        "equityCurve": [{"date": b.day.isoformat(), "equity": round(e, 6)} for b, e in zip(bars, curve)],
+        "execution": "prior close ranking; next raw open rebalance; final raw close liquidation",
+        "result": {"endingEquity": round(curve[-1], 6), "totalReturn": round(total, 8),
+                   "annualizedReturn": round((1 + total) ** (365 / elapsed) - 1, 8) if elapsed else None,
+                   "maxDrawdown": round(drawdown, 8), "orderCount": len(trades)},
+        "spyAdjustedCloseReturnBeforeCosts": benchmark,
+        "trades": trades, "daily": daily,
         "evidence": "SIMULATED_QUOTES_NO_BROKER_FILLS",
+        "limitations": ["point-in-time eligibility and adjusted closes depend on supplied data",
+                        "no partial fills, market impact, queue or tax model"],
     }
 
 
 def run(path: Path, **kwargs) -> dict:
-    bars = load_bars(path)
-    strategy = backtest(bars, **kwargs)
-    comparison = backtest(bars, **kwargs, baseline=True)
+    days, data = load_bars(path)
+    study = backtest(days, data, **kwargs)
     with path.open("rb") as source:
-        source_hash = hashlib.file_digest(source, "sha256").hexdigest()
-    return {"source": str(path), "sourceSha256": source_hash,
-            "strategy": strategy, "buyAndHold": comparison["result"],
-            "warning": "Results depend on supplied prices and assumed costs; no live-trading authorization."}
+        digest = hashlib.file_digest(source, "sha256").hexdigest()
+    return {"source": str(path), "sourceSha256": digest, "study": study}
