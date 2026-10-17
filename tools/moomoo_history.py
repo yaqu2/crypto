@@ -141,8 +141,11 @@ def main() -> None:
                     for token in args.codes.split(",") if token.strip()})
     if not codes or any(not code[3:].replace(".", "").isalnum() for code in codes):
         parser.error("provide valid US symbols")
-    with socket.create_connection(("127.0.0.1", 11111), timeout=3):
-        pass
+    try:
+        with socket.create_connection(("127.0.0.1", 11111), timeout=3):
+            pass
+    except OSError:
+        parser.exit(2, "OpenD is not reachable at 127.0.0.1:11111 on this machine. Start and log in to OpenD locally.\n")
     from moomoo import OpenQuoteContext
 
     client = OpenQuoteContext(host="127.0.0.1", port=11111)

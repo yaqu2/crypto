@@ -48,6 +48,50 @@ class MomentumTests(unittest.TestCase):
         result = backtest(self.days, data, lookback=1, top_n=1, fee_bps=0, slippage_bps=0)
         self.assertEqual(result["daily"][2]["selected"], ["BBB"])
 
+    def test_reversal_uses_opposite_prior_return_ranking(self):
+        data = {
+            self.days[0]: {"AAA": self.bar(0, "AAA", 10, 10), "BBB": self.bar(0, "BBB", 10, 10)},
+            self.days[1]: {"AAA": self.bar(1, "AAA", 12, 12), "BBB": self.bar(1, "BBB", 9, 9)},
+            self.days[2]: {"AAA": self.bar(2, "AAA", 12, 12), "BBB": self.bar(2, "BBB", 9, 9)},
+            self.days[3]: {"AAA": self.bar(3, "AAA", 12, 12), "BBB": self.bar(3, "BBB", 9, 9)},
+        }
+        result = backtest(self.days, data, lookback=1, top_n=1, rank_mode="reversal",
+                          fee_bps=0, slippage_bps=0)
+        self.assertEqual(result["daily"][2]["selected"], ["BBB"])
+
+    def test_rebalance_interval_preserves_position_between_decisions(self):
+        data = {day: {"AAA": self.bar(i, "AAA", 100 + i, 100 + i)} for i, day in enumerate(self.days)}
+        result = backtest(self.days, data, lookback=1, top_n=1, rebalance_every=3,
+                          fee_bps=0, slippage_bps=0)
+        self.assertEqual(result["result"]["orderCount"], 2)
+        self.assertEqual(result["daily"][3]["selected"], ["AAA"])
+
+    def test_trailing_stop_exits_at_next_open(self):
+        days = self.days + [self.days[-1] + timedelta(days=1)]
+        prices = [100, 110, 100, 80, 80]
+        data = {day: {"AAA": Bar(day, "AAA", p, p, p, 1, 0, True)}
+                for day, p in zip(days, prices)}
+        result = backtest(days, data, lookback=1, top_n=1, fee_bps=0, slippage_bps=0,
+                          trailing_stop_pct=0.1, cooldown_sessions=1)
+        self.assertEqual(result["riskEvents"][0]["triggeredAtClose"], days[3].isoformat())
+        exit_trade = next(t for t in result["trades"] if t["side"] == "SELL")
+        self.assertEqual(exit_trade["date"], days[4].isoformat())
+
+    def test_bear_market_gate_stays_in_cash(self):
+        days = [date(2026, 1, 5) + timedelta(days=i) for i in range(23)]
+        data = {}
+        for i, day in enumerate(days):
+            data[day] = {
+                "AAA": Bar(day, "AAA", 100 + i, 100 + i, 100 + i, 1, 0, True),
+                "SPY": Bar(day, "SPY", 200 - i, 200 - i, 200 - i, 1, 0, False),
+                "QQQ": Bar(day, "QQQ", 300 - i, 300 - i, 300 - i, 1, 0, False),
+            }
+        gated = backtest(days, data, lookback=1, top_n=1, regime_gate=True)
+        plain = backtest(days, data, lookback=1, top_n=1)
+        self.assertEqual(gated["result"]["orderCount"], 0)
+        self.assertGreater(plain["result"]["orderCount"], 0)
+        self.assertEqual(gated["daily"][-1]["marketStateKnownAtPriorClose"], "BEAR")
+
     def test_costs_reduce_result_and_missing_held_bar_fails(self):
         data = {day: {"AAA": self.bar(i, "AAA", 100 + i, 100 + i)} for i, day in enumerate(self.days)}
         free = backtest(self.days, data, lookback=1, top_n=1, fee_bps=0, slippage_bps=0)

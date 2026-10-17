@@ -51,10 +51,19 @@ def load_bars(path: Path) -> tuple[list[date], dict[date, dict[str, Bar]]]:
 
 
 def backtest(days: list[date], data: dict[date, dict[str, Bar]], *, lookback: int = 60,
-             top_n: int = 50, fee_bps: float = 10, slippage_bps: float = 5,
+             top_n: int = 50, rebalance_every: int = 1, rank_mode: str = "momentum",
+             regime_gate: bool = False, trailing_stop_pct: float | None = None,
+             cooldown_sessions: int = 5,
+             fee_bps: float = 10, slippage_bps: float = 5,
              initial_cash: float = 5000) -> dict:
-    if lookback < 1 or top_n < 1 or len(days) < lookback + 2:
-        raise ValueError("need positive lookback/top_n and at least lookback + 2 sessions")
+    if lookback < 1 or top_n < 1 or rebalance_every < 1 or len(days) < lookback + 2:
+        raise ValueError("need positive lookback/top_n/rebalance_every and at least lookback + 2 sessions")
+    if rank_mode not in ("momentum", "reversal"):
+        raise ValueError("rank_mode must be momentum or reversal")
+    if trailing_stop_pct is not None and (not 0 < trailing_stop_pct < 1 or cooldown_sessions < 1):
+        raise ValueError("trailing stop must be between 0 and 1 with positive cooldown")
+    if regime_gate and any("SPY" not in data[day] or "QQQ" not in data[day] for day in days):
+        raise ValueError("regime gate requires complete SPY and QQQ daily bars")
     if not math.isfinite(initial_cash) or initial_cash <= 0 or any(
         not math.isfinite(x) or x < 0 or x >= 10000 for x in (fee_bps, slippage_bps)
     ):
@@ -63,17 +72,29 @@ def backtest(days: list[date], data: dict[date, dict[str, Bar]], *, lookback: in
     cash = initial_cash
     shares: dict[str, float] = {}
     trades, daily = [], []
+    selected: list[str] = []
+    peak_equity, pause_remaining = initial_cash, 0
+    risk_events = []
+    from .regime import classify
+
     for i, day in enumerate(days):
         bars = data[day]
-        selected: list[str] = []
-        if i >= lookback + 1:
+        market_state = classify(days, data, i - 1)
+        paused_today = pause_remaining > 0
+        risk_off = paused_today or (regime_gate and market_state != "BULL")
+        rebalance = (i >= lookback + 1 and (i - lookback - 1) % rebalance_every == 0)
+        rebalance = rebalance or (i >= lookback + 1 and (risk_off or not selected))
+        if rebalance and risk_off:
+            selected = []
+        elif rebalance:
             previous, anchor = data[days[i - 1]], data[days[i - 1 - lookback]]
             ranks = [(bar.adj_close / anchor[symbol].adj_close - 1, symbol)
                      for symbol, bar in previous.items() if bar.eligible and symbol in anchor]
             if len(ranks) < top_n:
                 raise ValueError(f"eligible historical universe has {len(ranks)} ranked symbols, below top_n={top_n}")
-            selected = [s for _, s in sorted(ranks, key=lambda pair: (-pair[0], pair[1]))[:top_n]]
-        missing = (set(shares) | set(selected)) - bars.keys()
+            direction = -1 if rank_mode == "momentum" else 1
+            selected = [s for _, s in sorted(ranks, key=lambda pair: (direction * pair[0], pair[1]))[:top_n]]
+        missing = (set(shares) | (set(selected) if rebalance else set())) - bars.keys()
         if missing:
             raise ValueError(f"missing current raw bar on {day}: {','.join(sorted(missing))}")
         for symbol in shares:
@@ -87,7 +108,7 @@ def backtest(days: list[date], data: dict[date, dict[str, Bar]], *, lookback: in
                            "shares": round(qty, 8), "fillPrice": round(price, 8),
                            "fee": round(qty * price * fee, 8)})
 
-        for symbol in sorted(shares):
+        for symbol in sorted(shares) if rebalance else []:
             desired = target / bars[symbol].open if symbol in selected else 0.0
             qty = max(0.0, shares[symbol] - desired)
             if qty > 1e-12:
@@ -95,7 +116,7 @@ def backtest(days: list[date], data: dict[date, dict[str, Bar]], *, lookback: in
                 cash += qty * price * (1 - fee)
                 shares[symbol] -= qty
                 record(symbol, "SELL", qty, price)
-        for symbol in selected:
+        for symbol in selected if rebalance else []:
             price = bars[symbol].open * (1 + slip)
             desired = target / bars[symbol].open
             qty = min(max(0.0, desired - shares.get(symbol, 0.0)), cash / (price * (1 + fee)))
@@ -112,7 +133,21 @@ def backtest(days: list[date], data: dict[date, dict[str, Bar]], *, lookback: in
                 cash += qty * price * (1 - fee)
                 record(symbol, "SELL_FINAL_CLOSE", qty, price)
             equity = cash
+        if paused_today:
+            pause_remaining -= 1
+            if pause_remaining == 0:
+                peak_equity = equity
+        else:
+            peak_equity = max(peak_equity, equity)
+            if (trailing_stop_pct is not None and shares and
+                    equity < peak_equity * (1 - trailing_stop_pct)):
+                pause_remaining = cooldown_sessions
+                risk_events.append({"triggeredAtClose": day.isoformat(),
+                                    "reason": "EQUITY_TRAILING_STOP",
+                                    "exitTiming": "next available session open"})
         daily.append({"date": day.isoformat(), "selected": selected, "equity": round(equity, 6)})
+        daily[-1]["marketStateKnownAtPriorClose"] = market_state
+        daily[-1]["riskOffAtOpen"] = bool(risk_off)
     curve = [row["equity"] for row in daily]
     peak, drawdown = curve[0], 0.0
     for value in curve:
@@ -124,14 +159,20 @@ def backtest(days: list[date], data: dict[date, dict[str, Bar]], *, lookback: in
     benchmark = round(spy[-1].adj_close / spy[0].adj_close - 1, 8) if all(spy) else None
     return {
         "period": {"start": days[0].isoformat(), "end": days[-1].isoformat(), "sessions": len(days)},
-        "parameters": {"lookbackSessions": lookback, "topN": top_n, "feeBpsPerSide": fee_bps,
+        "parameters": {"lookbackSessions": lookback, "topN": top_n,
+                       "rebalanceEverySessions": rebalance_every, "rankMode": rank_mode,
+                       "regimeGate": regime_gate, "trailingStopPct": trailing_stop_pct,
+                       "cooldownSessions": cooldown_sessions,
+                       "feeBpsPerSide": fee_bps,
                        "slippageBpsPerSide": slippage_bps, "initialCash": initial_cash},
-        "execution": "prior close ranking; next raw open rebalance; final raw close liquidation",
+        "execution": "prior close ranking; next raw open rebalance on scheduled days; final raw close liquidation",
         "result": {"endingEquity": round(curve[-1], 6), "totalReturn": round(total, 8),
                    "annualizedReturn": round((1 + total) ** (365 / elapsed) - 1, 8) if elapsed else None,
-                   "maxDrawdown": round(drawdown, 8), "orderCount": len(trades)},
+                   "maxDrawdown": round(drawdown, 8), "orderCount": len(trades),
+                   "doublingDate": next((row["date"] for row in daily if row["equity"] >= 2 * initial_cash), None)},
         "spyAdjustedCloseReturnBeforeCosts": benchmark,
         "trades": trades, "daily": daily,
+        "riskEvents": risk_events,
         "evidence": "SIMULATED_QUOTES_NO_BROKER_FILLS",
         "limitations": ["point-in-time eligibility and adjusted closes depend on supplied data",
                         "no partial fills, market impact, queue or tax model"],

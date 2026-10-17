@@ -12,12 +12,20 @@ def main() -> None:
     parser.add_argument("csv", type=Path)
     parser.add_argument("--lookback", type=int, default=60)
     parser.add_argument("--top-n", type=int, default=50)
+    parser.add_argument("--rebalance-every", type=int, default=1)
+    parser.add_argument("--rank-mode", choices=("momentum", "reversal"), default="momentum")
+    parser.add_argument("--regime-gate", action="store_true")
+    parser.add_argument("--trailing-stop-pct", type=float)
+    parser.add_argument("--cooldown-sessions", type=int, default=5)
     parser.add_argument("--fee-bps", type=float, default=10)
     parser.add_argument("--slippage-bps", type=float, default=5)
     parser.add_argument("--initial-cash", type=float, default=5000)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
     result = run(args.csv, lookback=args.lookback, top_n=args.top_n,
+                 rebalance_every=args.rebalance_every, rank_mode=args.rank_mode,
+                 regime_gate=args.regime_gate, trailing_stop_pct=args.trailing_stop_pct,
+                 cooldown_sessions=args.cooldown_sessions,
                  fee_bps=args.fee_bps, slippage_bps=args.slippage_bps,
                  initial_cash=args.initial_cash)
     output = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
