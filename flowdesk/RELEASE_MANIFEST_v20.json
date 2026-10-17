@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0-market-laws",
+  "basedOn": "FlowDesk v1.9 complete project",
+  "tradeEnabled": false,
+  "liveOpenDValidated": false,
+  "alphaCertified": false,
+  "newStudy": "Three pre-fixed, daily-deduplicated quote-stress and SPY-relative market-pattern hypotheses; matched ET-day controls, ET-week sign-flip sensitivity and Holm adjustment",
+  "addedFiles": ["market_law_lab.py", "StudyMarketLaws.command", "tests/test_v20_market_laws.py", "README_v20_市场规律探索实验室.md"],
+  "modifiedFiles": ["market_quote_stress.py", "bridge.py", "dashboard.html", "runtime.py"],
+  "testClaimsAreSoftwareOnly": true,
+  "date": "2026-10-15"
+}

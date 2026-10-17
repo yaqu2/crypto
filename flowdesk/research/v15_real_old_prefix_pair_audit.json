@@ -1,0 +1,34 @@
+{
+  "status": "NO_GO_TRADE_OR_ALPHA_CERTIFICATION",
+  "mode": "READ_ONLY_QUOTE_PROVENANCE_AUDIT",
+  "verifiedLocalFileIntegrity": "VERIFIED_LOCAL_FILE_PREFIX_NOT_VENDOR_COMPLETENESS",
+  "closedRun": false,
+  "totalRawEvents": 64420,
+  "daysWithAnyRegularPush": [
+    "2026-10-12"
+  ],
+  "benchmark": "US.SPY",
+  "maxPairAgeSeconds": 5.0,
+  "counts": {
+    "regularBookPushEvents": 105,
+    "validRegularBooks": 105,
+    "quotePushRows": 50,
+    "sourceVerifiedQuotePushRows": 15,
+    "repeatedOrRegressiveQuotes": 35
+  },
+  "rejectionReasons": {
+    "noCausallyPriorFreshOwnQuote": 14,
+    "noCausallyPriorFreshBenchmarkQuote": 91
+  },
+  "perStock": {
+    "US.AAOI": {
+      "regularBookPushEvents": 54
+    },
+    "US.AAOX": {
+      "regularBookPushEvents": 51
+    }
+  },
+  "readyForForwardProfitEvaluation": false,
+  "liveOrdersEnabled": false,
+  "warning": "Causal local quote/book callbacks only; NO stock-exchange quote auth, consolidated NBBO, live fill or alpha proof"
+}

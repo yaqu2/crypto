@@ -1,0 +1,16 @@
+{
+  "version": "2.3.0-portfolio-quote-stress",
+  "base": "FlowDesk v2.2 complete project",
+  "scope": "Causal long-only capital-constrained displayed-quote scenarios with censored exits",
+  "newModules": ["market_portfolio_stress.py", "StudyPortfolioStress.command", "tests/test_v23_portfolio_stress.py", "README_v23_全市场组合压力与模拟成交边界.md"],
+  "changedFiles": ["bridge.py", "dashboard.html"],
+  "changedCoreRealtimeTradingSignalRules": false,
+  "frozenFutureTrialStarted": false,
+  "newRealMoomooDataCollected": false,
+  "realOrdersPlaced": false,
+  "brokerFillsMeasured": false,
+  "profitCertified": false,
+  "liveOrdersEnabled": false,
+  "offlineAutomatedTestsPassed": 389,
+  "releaseDate": "2026-10-15"
+}

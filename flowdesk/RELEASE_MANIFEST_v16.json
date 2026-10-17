@@ -1,0 +1,18 @@
+{
+  "version": "1.6.0-live-continuity",
+  "liveOrdersEnabled": false,
+  "softwareTestsPassing": 246,
+  "previousBaselineTests": 236,
+  "newTests": 10,
+  "sha256": {
+    "prospective.py": "b03c893fc73f64394838e71001bf144ecc9049d9162bd3838e86f3e906d952e3",
+    "runtime.py": "03eeefe513a3f2d1ad482fdd6daa71544441e635b08d7afafb5c58a088a8aaa8",
+    "forward_report.py": "2725cc21ba036fed530d02eafbaf3ba25b23bbadcbcacac2a5631a9ffba79287",
+    "bridge.py": "94f802520da404fcd9ff478d7b0f4c2dc7c6151139181bafb279a9e47fcb2f68",
+    "dashboard.html": "3ee916a68988584468b6e5163c4491e72915ea4b079b3e0d884a2d7ab24e129a",
+    "legacy_v15/prospective.py": "ed7e10d4d589418695b7a95f4a24baf306ab4e76aeff7b09b4ac53cd0db9feda",
+    "README_v16_实时研究断流熔断.md": "e70f529140489fd84d6a57116c6fdc584304646feda5e78b96c1f484f100c75e",
+    "独立验收报告_v16.md": "f26b90af7a851e05ba8bb1b55bfd269c5efe454e6be5e2911bc2420dc19aa954"
+  },
+  "realDataAlphaValidated": false
+}

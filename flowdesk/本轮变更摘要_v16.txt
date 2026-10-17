@@ -1,0 +1,10 @@
+FlowDesk v1.6 · 基于用户原工程的连续性与防伪利润修复
+- prospective.py: 15秒盘口间隔/时钟门禁 + 5秒源报价证据 + 协议v3
+- runtime.py: 定时监测持仓连续性并审慎删失
+- forward_report.py: 新v3严格核验并兼容旧v2/v1冻结协议
+- legacy_v15/prospective.py: 上一版研究引擎逐字节备份
+- bridge.py: 版本状态更新，不增加实盘下单接口
+- dashboard.html: 新增删失数和风险提示
+- research/archived_v15/: 旧的离线生成报告，不冒充新安装后的审计
+- tests/test_v16_live_watchdog.py: 10项专门反例测试；总测试246项
+- research/v16_旧日志配对报告.json: 原始用户日志重算后仍然NO-GO

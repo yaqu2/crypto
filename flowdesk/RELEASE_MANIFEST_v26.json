@@ -1,0 +1,28 @@
+{
+  "version": "2.6.0-research-multiscale",
+  "base": "FlowDesk v2.5 unmodified project; additive upgrade only",
+  "scope": "Read-only event-time microstructure, PIT external context, independent 1/3/5d model challenges, minute/day path risk diagnostics",
+  "newFiles": [
+    "multiscale_lab.py",
+    "multihorizon_runner.py",
+    "StudyMultiScale.command",
+    "StudyMultiHorizon.command",
+    "tests/test_v26_multiscale.py",
+    "README_v26_多尺度量化与模型选型.md",
+    "RELEASE_MANIFEST_v26.json",
+    "sector_watchlist_proposal.py",
+    "ProposeSectorWatchlist.command",
+    "tests/test_v26_etf_proposal.py"
+  ],
+  "changedExistingFiles": [],
+  "liveBrokerOrders": false,
+  "automatedProviderNewsOrRateIngestion": false,
+  "claimsVerifiedAlpha": false,
+  "limits": [
+    "L2 snapshots not message-by-order evidence",
+    "External context requires user/provider PIT data",
+    "Minute K-line finality heuristic only",
+    "Original old recording prefix is incomplete",
+    "Actual filled execution costs unavailable"
+  ]
+}

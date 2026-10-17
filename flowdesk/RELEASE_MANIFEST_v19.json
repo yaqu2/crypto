@@ -1,0 +1,14 @@
+{
+  "version": "1.9.0-quote-stress",
+  "basedOn": "FlowDesk v1.8 complete project",
+  "codeTestsPassed": 309,
+  "liveOpenDValidated": false,
+  "tradeEnabled": false,
+  "newEntries": [
+    "StudyExecution.command",
+    "quote-execution-stress HTTP endpoint"
+  ],
+  "scope": "Three distinct archived US listed-stock snapshots: signal then delayed-entry ask then future-exit bid; size+cost stress; no fills / no NBBO proof",
+  "preRegisteredTrialCompatibility": "Never modify existing sealed trial in place",
+  "date": "2026-10-15"
+}

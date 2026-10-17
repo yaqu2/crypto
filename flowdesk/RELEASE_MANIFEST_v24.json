@@ -1,0 +1,30 @@
+{
+  "version": "2.4.0-synthetic-order-lifecycle-rehearsal",
+  "base": "FlowDesk v2.3 complete project",
+  "scope": "Synthetic order lifecycle rehearsal AND read-only sector regime/breadth observations",
+  "newModules": [
+    "order_lifecycle_lab.py",
+    "StudyOrderLifecycle.command",
+    "tests/test_v24_order_lifecycle.py",
+    "README_v24_合成订单状态机与故障演练.md",
+    "sector_regime_lab.py",
+    "StudySectorRegimes.command",
+    "tests/test_v24_sector_regimes.py",
+    "README_v24_市场波段板块共振研究.md"
+  ],
+  "changedFiles": [
+    "bridge.py",
+    "dashboard.html"
+  ],
+  "changedCoreRealtimeTradingSignalRules": false,
+  "frozenFutureTrialStarted": false,
+  "newRealMoomooDataCollected": false,
+  "realOrdersPlaced": false,
+  "brokerFillsMeasured": false,
+  "profitCertified": false,
+  "liveOrdersEnabled": false,
+  "releaseDate": "2026-10-15",
+  "sectorRegimeTraining": "NOT_TRAINED; observation only",
+  "currentWeeksAIShockRecreated": false,
+  "liveDataCollected": false
+}

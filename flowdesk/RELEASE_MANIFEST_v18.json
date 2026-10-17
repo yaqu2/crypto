@@ -1,0 +1,11 @@
+{
+  "version": "1.8.0-forward-panel",
+  "basedOn": "FlowDesk v1.7 original project",
+  "codeTestsPassed": 282,
+  "liveOpenDValidated": false,
+  "tradeEnabled": false,
+  "newEntry": "StudySnapshots.command / forward-panel HTTP endpoint",
+  "scope": "separate SPY QQQ IWM benchmark quote snapshots + cross-archived-scan forward observation (not net P&L)",
+  "regressionFixed": "Administrative recorder events previously created phantom session coverage dates",
+  "date": "2026-10-15"
+}

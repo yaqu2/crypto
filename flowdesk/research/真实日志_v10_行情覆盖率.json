@@ -1,0 +1,55 @@
+{
+  "status": "NO_GO_PREFIX_EXPORT",
+  "runId": "20261012T092334Z-078d54b8",
+  "rawIntegrity": "VERIFIED_LOCAL_RAW_RECORDING_NOT_PROVIDER_COMPLETENESS",
+  "closedRun": false,
+  "tradingDaysObserved": 1,
+  "independentQualifiedDays": 0,
+  "requiredQualifiedDays": 30,
+  "sourceTimeVerifiedQuoteMinutesNotNBBO": true,
+  "bookCoverageIsCallbackTimeNotExchangeCompleteness": true,
+  "tradeEnabled": false,
+  "profitCertified": false,
+  "notProofOf": "SIP completeness, all-US-stock coverage, MBO, alpha, execution or future returns",
+  "days": [
+    {
+      "marketDateET": "2026-10-12",
+      "expectedRegularMinutes": 390,
+      "heartbeatMinutes": 246,
+      "healthyFeedHeartbeatMinutes": 0,
+      "observedNearOpenAndClose": false,
+      "benchmark": "US.SPY",
+      "benchmarkSourceVerifiedQuoteMinutes": 0,
+      "benchmarkQuoteMinuteCoverage": 0.0,
+      "quotesBySymbol": {
+        "US.AAOI": {
+          "sourceVerifiedQuoteMinutes": 1,
+          "quoteMinuteCoverage": 0.00256
+        },
+        "US.AAOX": {
+          "sourceVerifiedQuoteMinutes": 1,
+          "quoteMinuteCoverage": 0.00256
+        }
+      },
+      "bookCallbacksBySymbol": {
+        "US.AAOI": {
+          "callbackBookMinutes": 1,
+          "callbackMinuteCoverage": 0.00256,
+          "exchangeTimestampVerified": false
+        },
+        "US.AAOX": {
+          "callbackBookMinutes": 1,
+          "callbackMinuteCoverage": 0.00256,
+          "exchangeTimestampVerified": false
+        }
+      },
+      "validQuoteEvents": 50,
+      "validBookEvents": 105,
+      "vendorTickerEventsNotFullyReconciled": 90,
+      "staleOrOutOfOrderQuotes": 0,
+      "invalidQuotes": 0,
+      "invalidBooks": 0,
+      "status": "NO_GO_SESSION_COVERAGE"
+    }
+  ]
+}

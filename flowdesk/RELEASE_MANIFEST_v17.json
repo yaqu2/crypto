@@ -1,0 +1,10 @@
+{
+  "version": "1.7.0-market-proof",
+  "basedOn": "FlowDesk v1.6 with OTC batch repair",
+  "codeTestsPassed": 267,
+  "liveBrokerValidated": false,
+  "tradeEnabled": false,
+  "newEntry": "symbol-diagnostic?symbol=US.AAOI",
+  "scope": "current listed US market quote coverage + read-only active symbol evidence",
+  "timestamp": "2026-10-15"
+}

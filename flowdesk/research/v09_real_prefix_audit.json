@@ -1,0 +1,17 @@
+{
+  "source": "User supplied 2026-10-12/13 export of events.jsonl",
+  "bytes": 145918509,
+  "events": 64420,
+  "sha256": "681248ac2b8a2cc49954008ed44b40808c9a6a3a561523181a5e218475cd7b5c",
+  "prefixContentHashVerified": true,
+  "lineCountVerified": true,
+  "monotonicSeqVerified": true,
+  "closed": false,
+  "exportType": "prefix snapshot; recording continues",
+  "conclusion": "PASS_LOCAL_PREFIX_BYTE_INTEGRITY_ONLY_NOT_COMPLETE_RECORDER_RUN",
+  "fullRunCompletenessProven": false,
+  "marketDataCompletenessProven": false,
+  "liveAlphaValidated": false,
+  "liveOrdersEnabled": false,
+  "caution": "Source metadata closed=false: audited prefix only, not evidence that capture eventually ended cleanly."
+}

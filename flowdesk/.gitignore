@@ -1,0 +1,4 @@
+.private/
+research/news/
+__pycache__/
+.venv/

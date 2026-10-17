@@ -1,0 +1,45 @@
+{
+  "symbols": [
+    "US.SPY",
+    "US.QQQ",
+    "US.AAPL",
+    "US.MSFT",
+    "US.NVDA",
+    "US.AMD",
+    "US.AMZN",
+    "US.META",
+    "US.GOOGL",
+    "US.TSLA",
+    "US.AAOI",
+    "US.AAOX",
+    "US.LITE",
+    "US.COHR"
+  ],
+  "deepSymbols": [
+    "US.AAOI",
+    "US.AAOX",
+    "US.NVDA",
+    "US.SPY"
+  ],
+  "benchmark": "US.SPY",
+  "peers": {
+    "US.AAOI": [
+      "US.LITE",
+      "US.COHR"
+    ],
+    "US.LITE": [
+      "US.AAOI",
+      "US.COHR"
+    ],
+    "US.COHR": [
+      "US.AAOI",
+      "US.LITE"
+    ],
+    "US.NVDA": [
+      "US.AMD"
+    ],
+    "US.AMD": [
+      "US.NVDA"
+    ]
+  }
+}

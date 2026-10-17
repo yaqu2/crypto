@@ -1,0 +1,37 @@
+{
+  "version": "2.7.0-readonly-news-pit",
+  "base": "Unmodified FlowDesk v2.6, no frozen study",
+  "providers": [
+    "Massive-Benzinga-v2-licensed",
+    "Massive-news-hourly",
+    "Finnhub-general-plan-dependent"
+  ],
+  "newFiles": [
+    "news_feed.py",
+    "news_context.py",
+    "ConfigureNews.command",
+    "PollNews.command",
+    "StartNews.command",
+    "StudyNews.command",
+    "tests/test_v27_news.py",
+    "README_v27_实时新闻供应商接入与因果审计.md",
+    "RELEASE_MANIFEST_v27.json",
+    "install_v27.py",
+    "安装v27.command",
+    ".gitignore"
+  ],
+  "changedExistingFiles": [
+    "bridge.py",
+    "dashboard.html"
+  ],
+  "data": [
+    "research/news/news_events.jsonl",
+    "research/news/news_status.json"
+  ],
+  "noSecretBundled": true,
+  "providerCredentialsPresent": false,
+  "liveProviderConnectionVerified": false,
+  "realTimeRightsVerified": false,
+  "automaticTradingEnabled": false,
+  "verifiedAlpha": false
+}

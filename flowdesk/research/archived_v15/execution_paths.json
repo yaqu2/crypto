@@ -1,0 +1,10 @@
+{
+  "verdict": "NO_GO_REAL_TRADING",
+  "pathEvidenceAllComplete": false,
+  "runsFound": 0,
+  "runsWithVerifiedPaths": 0,
+  "runResults": [],
+  "liveOrdersEnabled": false,
+  "brokerFillsVerified": false,
+  "certifiedAlpha": false
+}

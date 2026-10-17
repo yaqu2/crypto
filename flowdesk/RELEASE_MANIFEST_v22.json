@@ -1,0 +1,16 @@
+{
+  "version": "2.2.0-prelaunch-engineering",
+  "base": "FlowDesk v2.1 complete project",
+  "scope": "Offline pre-collection code and evidence audit, does not create or change any trade signals",
+  "added": ["prelaunch_audit.py", "Preflight.command", "tests/test_v22_prelaunch.py", "README_v22_上线前总验收.md"],
+  "modifiedCoreTradingFiles": [],
+  "requestedFutureTrialStarted": false,
+  "newMarketDataCollected": false,
+  "paperOrdersPlaced": false,
+  "realOrdersPlaced": false,
+  "profitCertified": false,
+  "liveOrdersEnabled": false,
+  "localSdkTested": false,
+  "targetPlatform": "macOS / Moomoo OpenD (requires actual user-machine verification)",
+  "releaseDate": "2026-10-15"
+}

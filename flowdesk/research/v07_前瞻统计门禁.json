@@ -1,0 +1,252 @@
+{
+  "verdict": "NO_GO_REAL_TRADING",
+  "researchStage": "NO_GO_INDEPENDENT_EVIDENCE",
+  "paperAlphaResearchCandidates": [],
+  "notBrokerExecuted": true,
+  "liveOrdersEnabled": false,
+  "certifiedProfitability": false,
+  "runAudit": {
+    "found": 0,
+    "validComplete": 0,
+    "incompleteOrCorrupt": 0,
+    "allAuditable": false,
+    "inventoryPresent": false,
+    "allRawRunHashesPresent": true
+  },
+  "bookMinutesObservedOnEtDays": 0,
+  "daysWithAnyValidBookMinute": 0,
+  "eligibleFullerEtDays": 0,
+  "minObservedMinutesPerSymbol": 120,
+  "minSymbolsPerEligibleDay": 2,
+  "eligibleDays": [],
+  "modelExitsOnEligibleDays": 0,
+  "distinctExitSymbols": 0,
+  "paperEntriesAllRuns": 0,
+  "unfinishedPaperEntryFraction": 0.0,
+  "rejectedOrCensoredEvents": {},
+  "exitsOnIneligibleDays": 0,
+  "hypothesesTested": 12,
+  "multipleTesting": "JOINT_DAY_MAX_T_EXPLORATORY",
+  "reasons": [
+    "NO_FORWARD_RUNS",
+    "INCOMPLETE_OR_UNAUDITABLE_RUNS",
+    "RUN_INVENTORY_ABSENT_OR_NOT_CREATED_BY_THIS_VERSION",
+    "TOO_FEW_QUALIFIED_INDEPENDENT_DAYS",
+    "TOO_FEW_DISTINCT_SYMBOLS",
+    "TOO_FEW_QUOTE_MODEL_EXITS",
+    "NO_STATISTICAL_RESEARCH_CANDIDATE"
+  ],
+  "perRule": [
+    {
+      "rule": "follow-L1-H60",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "follow-L1-H300",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "follow-L5-H60",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "follow-L5-H300",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "revert-L1-H60",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "revert-L1-H300",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "revert-L5-H60",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "revert-L5-H300",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "follow-OFI1-H60",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "follow-OFI1-H300",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "revert-OFI1-H60",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    },
+    {
+      "rule": "revert-OFI1-H300",
+      "exitsOnEligibleDays": 0,
+      "activeEtDays": 0,
+      "symbols": 0,
+      "longModelExits": 0,
+      "shortNotBorrowVerifiedExits": 0,
+      "largestDayExitFraction": null,
+      "meanDayNormalizedBps": {
+        "8": null,
+        "20": null,
+        "40": null
+      },
+      "cost40PositiveAcrossDayProxy": false,
+      "dayConcentrationPass": false,
+      "exploratoryAdjustedTest": null
+    }
+  ],
+  "limitations": [
+    "同步日期聚类降低了逐笔伪独立问题，但不证明独立交易日具有平稳同分布特性",
+    "中心化符号翻转依赖近似对称分布假设；p值探索性、非严格Alpha认证",
+    "没有逐笔真实成交回报、借券资格、盘口完整覆盖、冲击及排队模型",
+    "盘中信号重叠、选择股票池、缺失/删失与多次查看结果仍可能扭曲估计",
+    "需要未来冻结测试集与真实执行审计才可评估交易资格"
+  ]
+}

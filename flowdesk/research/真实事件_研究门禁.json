@@ -1,0 +1,20 @@
+{
+  "events": 64420,
+  "pushBookEvents": 50588,
+  "regularBookEvents": 105,
+  "invalidRegularBooks": 0,
+  "regularUsableDates": [
+    "2026-10-12"
+  ],
+  "regularSymbols": [
+    "US.AAOI",
+    "US.AAOX"
+  ],
+  "symbolCount": 2,
+  "dayCount": 1,
+  "marketStructureSourceTimestamp": "CALLBACK_OR_LOCAL_RECEIPT_NOT_EXCHANGE_VERIFIED",
+  "trueExecutionFillsAvailable": false,
+  "gate": "NO_GO_INDEPENDENT_SAMPLE",
+  "estimatedMinDays": 35,
+  "liveOrdersEnabled": false
+}

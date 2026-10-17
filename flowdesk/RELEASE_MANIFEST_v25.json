@@ -1,0 +1,14 @@
+{
+  "version": "2.5.0-sector-reversal-model-challenger",
+  "base": "FlowDesk v2.4 unmodified complete project",
+  "scope": "Read-only chronological feature/label construction and challenger selection for sector rebound probability research",
+  "newModules": ["sector_model_lab.py", "StudyRegimeModels.command", "tests/test_v25_sector_models.py", "requirements_ml.txt", "README_v25_概率模型与波段学习.md"],
+  "changedFiles": ["bridge.py", "dashboard.html"],
+  "modelCandidates": ["BASE_RATE", "REGULARIZED_LOGIT", "HIST_GBDT", "ORDERED_CATBOOST"],
+  "honestLimitations": ["Only current static 4-name exploratory sector baskets", "All prices are sampled archive quotes, not broker fills", "No novel alpha discovered from new real sessions", "No confirmed live model probability"],
+  "realOrdersPlaced": false,
+  "realForwardDataAvailable": false,
+  "tradeSignal": false,
+  "profitCertified": false,
+  "releaseDate": "2026-10-15"
+}

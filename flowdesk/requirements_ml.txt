@@ -1,0 +1,2 @@
+scikit-learn>=1.4,<2.0
+catboost>=1.2,<2.0

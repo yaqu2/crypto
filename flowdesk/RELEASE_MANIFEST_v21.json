@@ -1,0 +1,12 @@
+{
+  "version": "2.1.0-robustness-red-team",
+  "base": "FlowDesk v2.0 full code",
+  "newFiles": ["market_robustness.py", "StudyRobustness.command", "tests/test_v21_robustness.py", "README_v21_市场规律稳健性与盈利反证.md"],
+  "modifiedFiles": ["bridge.py", "runtime.py", "dashboard.html"],
+  "readOnly": true,
+  "tradeEnabled": false,
+  "liveOpenDTested": false,
+  "alphaCertified": false,
+  "researchFindings": "Negative/positive synthetic assertions only; no actual all-market future archive supplied",
+  "date": "2026-10-15"
+}
