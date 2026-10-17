@@ -11,6 +11,35 @@ import webbrowser
 
 from .engine import PaperEngine
 from .feed import DemoFeed, MoomooFeed
+from .record import record_scan
+
+
+LIVE_SCAN_DIR = Path("data/paperdesk/scans")
+
+
+def capture_and_apply(feed, engine, scan_dir=None):
+    """Archive a live observation before any paper order can be inferred."""
+    try:
+        scan = feed.scan()
+    except Exception as exc:
+        with engine.lock:
+            engine.running = False
+            engine.error = f"FEED_ERROR: {type(exc).__name__}: {str(exc)[:180]}"
+            engine.gate = "FEED_ERROR"
+            engine.opportunities = []
+        return False
+    if not engine.demo:
+        try:
+            record_scan(scan, scan_dir or LIVE_SCAN_DIR)
+        except Exception as exc:
+            with engine.lock:
+                engine.running = False  # require a new explicit click after repair
+                engine.error = f"RECORD_ERROR: {type(exc).__name__}: {str(exc)[:180]}"
+                engine.gate = "RECORD_ERROR"
+                engine.opportunities = []
+            return False
+    engine.apply(scan)
+    return True
 
 
 def make_handler(engine, token):
@@ -54,7 +83,7 @@ def make_handler(engine, token):
     return Handler
 
 
-def serve(feed, engine, port=0, browser=True, interval=None):
+def serve(feed, engine, port=0, browser=True, interval=None, scan_dir=None):
     token = secrets.token_urlsafe(24)
     interval = interval or (3 if engine.demo else 90)
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(engine, token))
@@ -64,11 +93,12 @@ def serve(feed, engine, port=0, browser=True, interval=None):
     def scan_loop():
         while not stop.is_set():
             try:
-                engine.apply(feed.scan())
+                capture_and_apply(feed, engine, scan_dir)
             except Exception as exc:
                 with engine.lock:
+                    engine.running = False
                     engine.error = f"{type(exc).__name__}: {str(exc)[:220]}"
-                    engine.gate = "FEED_ERROR"
+                    engine.gate = "ENGINE_ERROR"
             stop.wait(interval)
 
     worker = threading.Thread(target=scan_loop, name="paperdesk-scan", daemon=True)
@@ -94,6 +124,8 @@ def main():
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--state", type=Path)
+    parser.add_argument("--scan-dir", type=Path, default=LIVE_SCAN_DIR,
+                        help="live OpenD scan archive directory (one gzip JSON per scan)")
     args = parser.parse_args()
     if not args.demo:
         try:
@@ -104,7 +136,7 @@ def main():
     feed = DemoFeed() if args.demo else MoomooFeed()
     state = args.state or Path("data/paperdesk/demo.json" if args.demo else "data/paperdesk/live.json")
     engine = PaperEngine(state, demo=args.demo)
-    serve(feed, engine, args.port, not args.no_browser)
+    serve(feed, engine, args.port, not args.no_browser, scan_dir=args.scan_dir)
 
 
 if __name__ == "__main__":
