@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from paperdesk.engine import PaperEngine
 from paperdesk.feed import DemoFeed, MoomooFeed
-from paperdesk.record import read_record, record_scan
+from paperdesk.record import read_capture_event, read_record, record_capture_event, record_scan
 from paperdesk.server import capture_and_apply
 
 
@@ -22,6 +22,24 @@ class ScanRecordTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.feed = DemoFeed()
+
+    def capture_events(self):
+        return [read_capture_event(path) for path in sorted(
+            (self.root / "scans" / "attempts").glob("*.json.gz"))]
+
+    def test_capture_event_is_append_only_and_rejects_extra_fields(self):
+        event = {"attemptId": "a" * 32, "startedAt": datetime.now(timezone.utc).isoformat(),
+                 "phase": "STARTED"}
+        first = record_capture_event(event, self.root / "scans" / "attempts")
+        second = record_capture_event(event, self.root / "scans" / "attempts")
+        self.assertNotEqual(first, second)
+        self.assertEqual(read_capture_event(first)["phase"], "STARTED")
+        with self.assertRaisesRegex(ValueError, "fields"):
+            record_capture_event({**event, "accountSecret": "forbidden"},
+                                 self.root / "scans" / "attempts")
+        first.write_bytes(first.read_bytes() + b"tampered")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            read_capture_event(first)
 
     def test_append_only_round_trip_and_checksum_detects_tampering(self):
         scan = self.feed.scan()
@@ -81,9 +99,14 @@ class ScanRecordTest(unittest.TestCase):
         state = engine.state()
         self.assertFalse(state["running"])
         self.assertEqual(state["gate"], "RECORD_ERROR")
-        self.assertIn("disk full", state["error"])
+        self.assertEqual(state["error"], "RECORD_ERROR: OSError")
         self.assertFalse(state["account"]["trades"])
         self.assertFalse((self.root / "live.json").exists())
+        events = self.capture_events()
+        self.assertEqual([event["phase"] for event in events], ["STARTED", "RECORD_ERROR"])
+        self.assertEqual(events[0]["attemptId"], events[1]["attemptId"])
+        self.assertEqual(events[1]["exceptionType"], "OSError")
+        self.assertNotIn("disk full", json.dumps(events))
 
     def test_feed_failure_disarms_bot(self):
         engine = PaperEngine(self.root / "live.json", demo=False)
@@ -94,6 +117,59 @@ class ScanRecordTest(unittest.TestCase):
         self.assertFalse(state["running"])
         self.assertEqual(state["gate"], "FEED_ERROR")
         self.assertFalse(state["account"]["trades"])
+        events = self.capture_events()
+        self.assertEqual([event["phase"] for event in events], ["STARTED", "FEED_ERROR"])
+        self.assertEqual(events[1]["exceptionType"], "RuntimeError")
+        self.assertNotIn("quote unavailable", json.dumps(events))
+
+    def test_capture_audit_failure_latches_and_skips_later_feed_scans(self):
+        engine = PaperEngine(self.root / "live.json", demo=False)
+        calls = []
+
+        class CountingFeed:
+            def scan(self):
+                calls.append(1)
+                return self.feed.scan()
+
+        feed = CountingFeed()
+        feed.feed = self.feed
+        with patch("paperdesk.server.record_capture_event", side_effect=OSError("secret-in-message")):
+            self.assertFalse(capture_and_apply(feed, engine, self.root / "scans"))
+        self.assertFalse(capture_and_apply(feed, engine, self.root / "scans"))
+        self.assertEqual(calls, [])
+        self.assertEqual(engine.state()["gate"], "CAPTURE_AUDIT_ERROR")
+        self.assertNotIn("secret-in-message", json.dumps(engine.state()))
+        self.assertFalse((self.root / "scans").exists())
+
+    def test_archived_scan_is_not_applied_when_terminal_event_fails(self):
+        engine = PaperEngine(self.root / "live.json", demo=False)
+        calls = []
+
+        def write_event(event, directory):
+            calls.append(event["phase"])
+            if event["phase"] == "SCAN_ARCHIVED":
+                raise OSError("cannot publish terminal event")
+            return record_capture_event(event, directory)
+
+        with patch("paperdesk.server.record_capture_event", side_effect=write_event), \
+                patch.object(engine, "apply") as apply:
+            self.assertFalse(capture_and_apply(self.feed, engine, self.root / "scans"))
+            apply.assert_not_called()
+        self.assertEqual(calls, ["STARTED", "SCAN_ARCHIVED"])
+        self.assertEqual(engine.state()["gate"], "CAPTURE_AUDIT_ERROR")
+        self.assertEqual(len(list((self.root / "scans").glob("*.json.gz"))), 1)
+        self.assertEqual([event["phase"] for event in self.capture_events()], ["STARTED"])
+
+    def test_engine_error_is_marked_after_archived_scan(self):
+        engine = PaperEngine(self.root / "live.json", demo=False)
+        with patch.object(engine, "apply", side_effect=RuntimeError("private details")):
+            self.assertFalse(capture_and_apply(self.feed, engine, self.root / "scans"))
+        events = self.capture_events()
+        self.assertEqual([event["phase"] for event in events],
+                         ["STARTED", "SCAN_ARCHIVED", "ENGINE_ERROR"])
+        self.assertEqual(len({event["attemptId"] for event in events}), 1)
+        self.assertNotIn("private details", json.dumps(events))
+        self.assertEqual(engine.state()["gate"], "ENGINE_ERROR")
 
     def test_incomplete_live_scan_is_archived_before_engine_blocks_trade(self):
         engine = PaperEngine(self.root / "live.json", demo=False)
@@ -109,6 +185,9 @@ class ScanRecordTest(unittest.TestCase):
         self.assertTrue(capture_and_apply(OneScanFeed(), engine, self.root / "scans"))
         [record] = list((self.root / "scans").glob("*.json.gz"))
         self.assertFalse(read_record(record)["complete"])
+        events = self.capture_events()
+        self.assertEqual([event["phase"] for event in events], ["STARTED", "SCAN_ARCHIVED"])
+        self.assertEqual(events[1]["scanFile"], record.name)
         self.assertEqual(engine.state()["gate"], "INCOMPLETE_OR_STALE_MARKET_SCAN")
         self.assertFalse(engine.state()["account"]["trades"])
 

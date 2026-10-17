@@ -1,12 +1,16 @@
 """Recorded-snapshot research must never fill at signal time."""
 
 from datetime import datetime, timedelta, timezone
+import gzip
+import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from paperdesk.record import record_scan
-from quantlab.intraday_eval import _segment, evaluate, evaluate_archive, load_snapshots
+from quantlab.intraday_eval import _segment, evaluate, evaluate_archive, load_snapshots, register_archive
 
 
 def scan(at, candidate_price=100, *, complete=True, synthetic=False):
@@ -42,6 +46,28 @@ class IntradayEvalTest(unittest.TestCase):
             record_scan(item, self.directory)
         return load_snapshots(self.directory)
 
+    def register(self, cutoff):
+        class FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                fixed = datetime(2026, 10, 17, 12, tzinfo=timezone.utc)
+                return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        with patch("quantlab.intraday_eval.datetime", FrozenDatetime):
+            return register_archive(self.directory, cutoff)
+
+    def attempt(self, attempt_id, at, phase, *, scan_file=None, exception_type=None):
+        event = {"schemaVersion": 1, "attemptId": f"{attempt_id:032x}",
+                 "startedAt": at.isoformat(), "recordedAt": at.isoformat(), "phase": phase}
+        if scan_file is not None:
+            event["scanFile"] = scan_file
+        if exception_type is not None:
+            event["exceptionType"] = exception_type
+        raw = gzip.compress((json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n").encode(), mtime=0)
+        folder = self.directory / "attempts"
+        folder.mkdir(exist_ok=True)
+        (folder / f"{attempt_id}-{hashlib.sha256(raw).hexdigest()}.json.gz").write_bytes(raw)
+
     def test_missing_archive_is_explicit_no_go(self):
         result = evaluate_archive(self.directory / "scans")
         self.assertEqual(result["status"], "NO_GO")
@@ -72,6 +98,15 @@ class IntradayEvalTest(unittest.TestCase):
         self.assertEqual(result["train"]["trades"], [])
         self.assertEqual(result["holdout"]["trades"], [])
         self.assertIn("COMPLETE_FRESH_SCAN_FRACTION_BELOW_95_PERCENT", result["reasons"])
+
+    def test_incomplete_scan_marks_held_position_without_trading(self):
+        scans = self.archive([scan(self.t0), scan(self.t0 + timedelta(seconds=90), 102),
+                              scan(self.t0 + timedelta(seconds=180), 70, complete=False)])
+        segment = _segment(scans)
+        self.assertEqual([trade["side"] for trade in segment["trades"]], ["BUY"])
+        self.assertLess(segment["equityCurve"][-1]["equity"],
+                        segment["equityCurve"][-2]["equity"] - 1000)
+        self.assertEqual(segment["staleHeldMarks"], 0)
 
     def test_missing_next_round_bbo_cancels_entry(self):
         second = scan(self.t0 + timedelta(seconds=90))
@@ -168,8 +203,153 @@ class IntradayEvalTest(unittest.TestCase):
                               scan(self.t0 + timedelta(seconds=270), 108)])
         expected = evaluate(scans)
         actual = evaluate_archive(self.directory)
+        expected["validationRegistration"]["path"] = str(self.directory / "validation.lock")
         self.assertEqual(actual, expected)
         self.assertEqual(len(actual["sample"]["archiveSha256List"]), 4)
+
+    def test_missing_registration_and_attempt_log_force_no_go(self):
+        self.archive([scan(self.t0), scan(self.t0 + timedelta(seconds=90))])
+        result = evaluate_archive(self.directory)
+        self.assertIn("MISSING_VALIDATION_REGISTRATION", result["reasons"])
+        self.assertIn("MISSING_CAPTURE_ATTEMPT_LOG", result["reasons"])
+        self.assertEqual(result["validationRegistration"]["splitMethod"], "EXPLORATORY_70_30")
+
+    def test_registered_holdout_date_stays_fixed_as_new_days_arrive(self):
+        self.archive([scan(self.t0), scan(self.t0 + timedelta(seconds=90))])
+        lock = self.register("2026-10-19")
+        self.assertEqual(lock["cutoffEtDate"], "2026-10-19")
+        monday = self.t0 + timedelta(days=3)
+        self.archive([scan(monday), scan(monday + timedelta(seconds=90))])
+        result = evaluate_archive(self.directory)
+        self.assertEqual(result["validationRegistration"]["status"], "VALID")
+        self.assertEqual(result["sample"]["holdoutStart"], monday.isoformat())
+        self.archive([scan(monday + timedelta(days=1))])
+        later = evaluate_archive(self.directory)
+        self.assertEqual(later["sample"]["holdoutStart"], monday.isoformat())
+        self.assertEqual(later["validationRegistration"]["splitMethod"], "REGISTERED_ET_DATE")
+        self.assertEqual(later["validationRegistration"]["sha256"],
+                         hashlib.sha256((self.directory / "validation.lock").read_bytes()).hexdigest())
+
+    def test_registration_rejects_changed_strategy_or_training_archive(self):
+        self.archive([scan(self.t0), scan(self.t0 + timedelta(seconds=90))])
+        self.register("2026-10-19")
+        with self.assertRaises(FileExistsError):
+            self.register("2026-10-20")
+        lock_file = self.directory / "validation.lock"
+        original = lock_file.read_bytes()
+        changed = json.loads(original)
+        changed["strategyCode"]["paperEngineSha256"] = "0" * 64
+        lock_file.write_text(json.dumps(changed), encoding="utf-8")
+        result = evaluate_archive(self.directory)
+        self.assertIn("REGISTRATION_STRATEGY_CODE_MISMATCH", result["reasons"])
+        lock_file.write_bytes(original)
+        self.archive([scan(self.t0 - timedelta(seconds=90))])
+        result = evaluate_archive(self.directory)
+        self.assertIn("REGISTRATION_TRAIN_ARCHIVE_MISMATCH", result["reasons"])
+
+    def test_registration_detects_late_training_attempt_event(self):
+        self.archive([scan(self.t0)])
+        self.register("2026-10-19")
+        self.attempt(1, self.t0, "STARTED")
+        result = evaluate_archive(self.directory)
+        self.assertIn("REGISTRATION_TRAIN_ATTEMPT_LOG_MISMATCH", result["reasons"])
+
+    def test_failed_regular_attempt_counts_against_capture_coverage(self):
+        scans = self.archive([scan(self.t0)])
+        self.attempt(1, self.t0, "STARTED")
+        self.attempt(1, self.t0, "SCAN_ARCHIVED", scan_file=scans[0]["_fileName"])
+        self.attempt(2, self.t0 + timedelta(seconds=90), "STARTED")
+        self.attempt(2, self.t0 + timedelta(seconds=90), "FEED_ERROR", exception_type="ConnectionError")
+        self.register("2026-10-19")
+        result = evaluate_archive(self.directory)
+        self.assertEqual(result["captureAttempts"]["failedAttempts"], 1)
+        self.assertEqual(result["captureAttempts"]["regularAttempts"], 2)
+        self.assertEqual(result["captureAttempts"]["regularCompleteScanFraction"], .5)
+        self.assertIn("CAPTURE_ATTEMPT_COVERAGE_BELOW_95_PERCENT", result["reasons"])
+
+    def test_successful_attempts_match_all_scans_and_offhours_failure_is_reported(self):
+        scans = self.archive([scan(self.t0), scan(self.t0 + timedelta(seconds=90))])
+        for index, item in enumerate(scans, 1):
+            self.attempt(index, item["_at"], "STARTED")
+            self.attempt(index, item["_at"], "SCAN_ARCHIVED", scan_file=item["_fileName"])
+        weekend = self.t0 + timedelta(days=1)
+        self.attempt(3, weekend, "STARTED")
+        self.attempt(3, weekend, "FEED_ERROR", exception_type="TimeoutError")
+        self.register("2026-10-19")
+        result = evaluate_archive(self.directory)
+        self.assertEqual(result["captureAttempts"]["status"], "VALID")
+        self.assertEqual(result["captureAttempts"]["totalAttempts"], 3)
+        self.assertEqual(result["captureAttempts"]["failedAttempts"], 1)
+        self.assertEqual(result["captureAttempts"]["regularAttempts"], 2)
+        self.assertEqual(result["captureAttempts"]["regularCompleteScanFraction"], 1.0)
+        self.assertNotIn("CAPTURE_ATTEMPT_COVERAGE_BELOW_95_PERCENT", result["reasons"])
+
+    def test_attempt_started_during_regular_hours_counts_when_scan_finishes_after_close(self):
+        near_close = self.t0.replace(hour=19, minute=59)
+        item = scan(near_close + timedelta(minutes=1))
+        item["regular"] = False
+        scans = self.archive([item])
+        self.attempt(1, near_close, "STARTED")
+        self.attempt(1, near_close, "SCAN_ARCHIVED", scan_file=scans[0]["_fileName"])
+        result = evaluate_archive(self.directory)
+        self.assertEqual(result["captureAttempts"]["regularAttempts"], 1)
+        self.assertEqual(result["captureAttempts"]["regularCompleteScanFraction"], 0.0)
+
+    def test_corrupted_attempt_event_checksum_is_no_go(self):
+        self.archive([scan(self.t0)])
+        self.attempt(1, self.t0, "STARTED")
+        file = next((self.directory / "attempts").glob("*.json.gz"))
+        file.write_bytes(file.read_bytes() + b"x")
+        self.assertIn("INVALID_CAPTURE_ATTEMPT_LOG", evaluate_archive(self.directory)["reasons"])
+
+    def test_orphan_scan_and_engine_error_block_research_pass(self):
+        scans = self.archive([scan(self.t0)])
+        self.attempt(1, self.t0, "STARTED")
+        result = evaluate_archive(self.directory)
+        self.assertIn("INCOMPLETE_OR_CONFLICTING_CAPTURE_ATTEMPT_LOG", result["reasons"])
+        self.assertIn("CAPTURE_ATTEMPT_SCAN_MISMATCH", result["reasons"])
+        self.attempt(1, self.t0, "SCAN_ARCHIVED", scan_file=scans[0]["_fileName"])
+        self.attempt(1, self.t0, "ENGINE_ERROR", exception_type="RuntimeError")
+        result = evaluate_archive(self.directory)
+        self.assertEqual(result["captureAttempts"]["engineErrors"], 1)
+        self.assertIn("PAPER_ENGINE_EXECUTION_ERRORS", result["reasons"])
+
+    def test_drawdown_review_freezes_future_orders(self):
+        snapshots = [scan(self.t0 + timedelta(seconds=90 * i)) for i in range(4)]
+        for item in snapshots:
+            for row in item["rows"][:3]:
+                row.update(lastPrice=100, bidPrice=99.95, askPrice=100.05,
+                           changePct=2, turnover=10_000_000)
+        for row in snapshots[2]["rows"][:3]:
+            row.update(lastPrice=70, bidPrice=69.95, askPrice=70.05)
+        scans = self.archive(snapshots)
+        segment = _segment(scans)
+        self.assertEqual([trade["side"] for trade in segment["trades"]], ["BUY"] * 3)
+        self.assertTrue(segment["riskReviewRequired"])
+        self.assertEqual(segment["riskReviewAt"], snapshots[2]["at"])
+        self.assertEqual(segment["openPositions"], 3)
+        lock = self.register("2026-10-19")
+        self.assertIn("PORTFOLIO_DRAWDOWN_REVIEW_REQUIRED", evaluate(scans, lock)["reasons"])
+
+    def test_continuous_risk_remains_latched_across_registered_cutoff(self):
+        friday = [scan(self.t0), scan(self.t0 + timedelta(seconds=90))]
+        for item in friday:
+            for row in item["rows"][:3]:
+                row.update(lastPrice=100, bidPrice=99.95, askPrice=100.05,
+                           changePct=2, turnover=10_000_000)
+        self.archive(friday)
+        self.register("2026-10-19")
+        monday_at = self.t0 + timedelta(days=3)
+        monday = scan(monday_at)
+        for row in monday["rows"][:3]:
+            row.update(lastPrice=70, bidPrice=69.95, askPrice=70.05)
+        self.archive([monday])
+        result = evaluate_archive(self.directory)
+        self.assertFalse(result["train"]["riskReviewRequired"])
+        self.assertFalse(result["holdout"]["riskReviewRequired"])
+        self.assertTrue(result["continuousRisk"]["riskReviewRequired"])
+        self.assertEqual(result["continuousRisk"]["riskReviewAt"], monday["at"])
+        self.assertIn("PORTFOLIO_DRAWDOWN_REVIEW_REQUIRED", result["reasons"])
 
 
 if __name__ == "__main__":

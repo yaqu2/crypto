@@ -1,5 +1,6 @@
 """The dashboard must show research evidence separately from paper PnL."""
 import json
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 import tempfile
@@ -48,8 +49,44 @@ class EvidencePanelTest(unittest.TestCase):
                                  spyNetReturnPct=2.0)
         report["holdoutStress"]["netReturnPct"] = 2.1
         report["reasons"] = []
+        report["validationRegistration"] = {"status": "VALID", "splitMethod": "REGISTERED_ET_DATE",
+                                            "cutoffEtDate": "2026-10-01", "sha256": "a" * 64}
+        report["captureAttempts"] = {"status": "VALID", "regularCompleteScanFraction": .99,
+                                     "engineErrors": 0}
+        report["continuousRisk"] = {"riskReviewRequired": False}
         self.report.write_text(json.dumps(report, indent=4), encoding="utf-8")
         self.assertEqual(reader.read()["status"], "RESEARCH_ONLY")
+        report["continuousRisk"]["riskReviewRequired"] = True
+        self.report.write_text(json.dumps(report), encoding="utf-8")
+        self.assertEqual(reader.read()["status"], "INVALID_REPORT")
+
+    def test_new_live_scan_marks_preliminary_report_stale(self):
+        now = datetime.now(timezone.utc)
+        report = {"status": "RESEARCH_ONLY", "reasons": [],
+                  "sample": {"regularTradingDays": 80, "holdoutTradingDays": 24,
+                             "fullSessionDays": 80, "completeFreshScanFraction": .99,
+                             "lastAt": (now - timedelta(minutes=2)).isoformat()},
+                  "train": {"completedRoundTrips": 80},
+                  "holdout": {"completedRoundTrips": 35, "netReturnPct": 5.2,
+                              "spyNetReturnPct": 2.0},
+                  "holdoutStress": {"netReturnPct": 2.1},
+                  "validationRegistration": {"status": "VALID", "splitMethod": "REGISTERED_ET_DATE",
+                                             "cutoffEtDate": "2026-10-01", "sha256": "b" * 64},
+                  "captureAttempts": {"status": "VALID", "regularCompleteScanFraction": .99,
+                                      "engineErrors": 0},
+                  "continuousRisk": {"riskReviewRequired": False}}
+        self.report.write_text(json.dumps(report), encoding="utf-8")
+        engine = PaperEngine(self.root / "live.json", demo=False)
+        engine.scan = {"at": now.isoformat()}
+        server = ThreadingHTTPServer(("127.0.0.1", 0),
+                                     make_handler(engine, "token", EvidenceReader(self.report)))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 2)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with urlopen(f"http://127.0.0.1:{server.server_port}/t/token/api/state") as response:
+            self.assertEqual(json.load(response)["evidence"]["status"], "STALE_REPORT")
 
     def test_http_state_includes_unverified_evidence_not_demo_profit(self):
         engine = PaperEngine(self.root / "demo.json", demo=True)

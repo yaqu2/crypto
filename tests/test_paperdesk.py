@@ -293,7 +293,7 @@ class PaperDeskTest(unittest.TestCase):
         held = self.engine.account["positions"]
         for quote in scan["rows"]:
             if quote["code"] in held:
-                quote["lastPrice"] = held[quote["code"]]["entry"] * 0.5
+                quote["lastPrice"] = held[quote["code"]]["entry"] * 0.85
         self.engine.apply(scan)
         self.assertEqual(self.engine.state()["gate"], "DAILY_LOSS_LIMIT")
         buy_count = sum(t["side"] == "BUY" for t in self.engine.account["trades"])
@@ -313,10 +313,88 @@ class PaperDeskTest(unittest.TestCase):
         scan = self.feed.scan()
         for quote in scan["rows"]:
             if quote["code"] in held:
-                quote["lastPrice"] = held[quote["code"]]["entry"] * 0.5
+                quote["lastPrice"] = held[quote["code"]]["entry"] * 0.85
         self.engine.apply(scan)
         self.assertAlmostEqual(self.engine.account["dayStartEquity"], prior_equity, places=2)
         self.assertEqual(self.engine.state()["gate"], "DAILY_LOSS_LIMIT")
+
+    def test_ten_percent_portfolio_drawdown_requires_explicit_review_after_restart(self):
+        self.engine.control("start")
+        self.engine.apply(self.feed.scan())
+        positions = self.engine.account["positions"]
+        self.assertEqual(len(positions), 3)
+        scan = self.feed.scan()
+        for quote in scan["rows"]:
+            if quote["code"] in positions:
+                quote["lastPrice"] = positions[quote["code"]]["entry"] * .5
+        trade_count = len(self.engine.account["trades"])
+        self.engine.apply(scan)
+        state = self.engine.state()
+        self.assertEqual(state["gate"], "PORTFOLIO_DRAWDOWN_REVIEW")
+        self.assertFalse(state["running"])
+        self.assertTrue(state["account"]["riskReviewRequired"])
+        self.assertLessEqual(state["account"]["drawdownPct"], -10)
+        self.assertEqual(len(self.engine.account["trades"]), trade_count)
+        self.assertEqual(len(self.engine.account["positions"]), 3)
+        restored = PaperEngine(self.state_path, demo=True)
+        restored.control("start")
+        self.assertFalse(restored.running)
+        self.assertEqual(restored.gate, "PORTFOLIO_DRAWDOWN_REVIEW")
+        with self.assertRaisesRegex(ValueError, "review note"):
+            restored.control("review", "short")
+        restored.control("review", "已检查所有持仓、亏损及数据质量，决定继续模拟观察。")
+        self.assertFalse(restored.running)
+        self.assertFalse(restored.account["riskReviewRequired"])
+        self.assertEqual(len(restored.account["riskReviewHistory"]), 1)
+
+    def test_legacy_account_without_saved_peak_requires_new_risk_baseline(self):
+        self.engine.control("start")
+        self.engine.apply(self.feed.scan())
+        saved = json.loads(self.state_path.read_text(encoding="utf-8"))
+        for key in ("peakEquity", "riskReviewRequired", "riskReviewAt",
+                    "riskReviewReason", "riskReviewHistory"):
+            saved["account"].pop(key)
+        self.state_path.write_text(json.dumps(saved), encoding="utf-8")
+        restored = PaperEngine(self.state_path, demo=True)
+        self.assertTrue(restored.account["riskReviewRequired"])
+        self.assertEqual(restored.account["riskReviewReason"], "LEGACY_PEAK_UNKNOWN")
+        restored.control("start")
+        self.assertFalse(restored.running)
+        self.assertEqual(restored.gate, "LEGACY_RISK_BASELINE_REVIEW")
+        restored.control("review", "已复核旧账户的持仓与权益，建立新的组合风险基线。")
+        self.assertFalse(restored.account["riskReviewRequired"])
+
+    def test_risk_review_http_requires_scoped_origin_and_written_note(self):
+        self.engine.control("start")
+        self.engine.apply(self.feed.scan())
+        held = self.engine.account["positions"]
+        scan = self.feed.scan()
+        for quote in scan["rows"]:
+            if quote["code"] in held:
+                quote["lastPrice"] = held[quote["code"]]["entry"] * .5
+        self.engine.apply(scan)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.engine, "reviewtoken"))
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 2)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_port}/t/reviewtoken/api/review"
+        body = json.dumps({"note": "已检查模拟持仓、报价完整性和亏损来源。"}).encode()
+        with self.assertRaises(HTTPError) as missing_origin:
+            urlopen(Request(url, data=body, method="POST",
+                            headers={"Content-Type": "application/json"}))
+        self.assertEqual(missing_origin.exception.code, 403)
+        with self.assertRaises(HTTPError) as invalid_note:
+            urlopen(Request(url, data=b'{"note":"short"}', method="POST",
+                            headers={"Origin": f"http://127.0.0.1:{server.server_port}",
+                                     "Content-Type": "application/json"}))
+        self.assertEqual(invalid_note.exception.code, 400)
+        with urlopen(Request(url, data=body, method="POST",
+                             headers={"Origin": f"http://127.0.0.1:{server.server_port}",
+                                      "Content-Type": "application/json"})) as response:
+            self.assertFalse(json.load(response)["running"])
+        self.assertFalse(self.engine.account["riskReviewRequired"])
 
     def test_coverage_counts_cannot_claim_missing_quotes(self):
         self.engine.control("start")

@@ -1,18 +1,21 @@
 """Loopback dashboard with token-scoped controls; all trades stay simulated."""
 import argparse
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
 from pathlib import Path
 import secrets
 import socket
+import sys
 import threading
 import time
+import uuid
 import webbrowser
 
 from .engine import PaperEngine
 from .feed import DemoFeed, MoomooFeed
-from .record import record_scan
+from .record import record_capture_event, record_scan
 
 
 LIVE_SCAN_DIR = Path("data/paperdesk/scans")
@@ -51,7 +54,11 @@ class EvidenceReader:
                 train = report.get("train") or {}
                 holdout = report.get("holdout") or {}
                 stress = report.get("holdoutStress") or {}
-                if not all(isinstance(x, dict) for x in (sample, train, holdout, stress)):
+                registration = report.get("validationRegistration") or {}
+                attempts = report.get("captureAttempts") or {}
+                continuous_risk = report.get("continuousRisk") or {}
+                if not all(isinstance(x, dict) for x in (sample, train, holdout, stress,
+                                                        registration, attempts, continuous_risk)):
                     raise ValueError("invalid evaluation summary")
 
                 def finite(value):
@@ -68,11 +75,20 @@ class EvidenceReader:
                     stressed = finite(stress.get("netReturnPct"))
                     coverage = finite(sample.get("completeFreshScanFraction"))
                     full_days = finite(sample.get("fullSessionDays"))
+                    attempt_coverage = finite(attempts.get("regularCompleteScanFraction"))
                     if (reasons or None in (days, holdout_days, holdout_trades, train_trades,
-                                            result, spy, stressed, coverage, full_days) or
+                                            result, spy, stressed, coverage, full_days, attempt_coverage) or
                             days < 60 or holdout_days < 20 or holdout_trades < 30 or
                             train_trades + holdout_trades < 100 or coverage < .95 or
-                            full_days / days < .95 or result <= 0 or result <= spy or stressed <= 0):
+                            attempt_coverage < .95 or full_days / days < .95 or
+                            result <= 0 or result <= spy or stressed <= 0 or
+                            registration.get("status") != "VALID" or
+                            registration.get("splitMethod") != "REGISTERED_ET_DATE" or
+                            not isinstance(registration.get("cutoffEtDate"), str) or
+                            not isinstance(registration.get("sha256"), str) or
+                            len(registration["sha256"]) != 64 or
+                            attempts.get("status") != "VALID" or attempts.get("engineErrors") != 0 or
+                            continuous_risk.get("riskReviewRequired") is not False):
                         raise ValueError("research status contradicts reported gates")
                 self._summary = {
                     "status": report["status"],
@@ -92,26 +108,60 @@ class EvidenceReader:
 
 def capture_and_apply(feed, engine, scan_dir=None):
     """Archive a live observation before any paper order can be inferred."""
+    directory = Path(scan_dir) if scan_dir is not None else LIVE_SCAN_DIR
+
+    def disarm(gate, message):
+        with engine.lock:
+            engine.running = False
+            engine.error = message
+            engine.gate = gate
+            engine.opportunities = []
+
+    if not engine.demo:
+        # Once an audit write fails, no later scan in this process may trade or
+        # silently make an apparently complete research sample.
+        if getattr(engine, "capture_audit_failed", False):
+            disarm("CAPTURE_AUDIT_ERROR", "CAPTURE_AUDIT_ERROR: restart after repairing capture storage")
+            return False
+        attempt = {"attemptId": uuid.uuid4().hex,
+                   "startedAt": datetime.now(timezone.utc).isoformat()}
+
+        def event(phase, **extra):
+            try:
+                record_capture_event({**attempt, "phase": phase, **extra}, directory / "attempts")
+                return True
+            except Exception:
+                engine.capture_audit_failed = True
+                disarm("CAPTURE_AUDIT_ERROR", "CAPTURE_AUDIT_ERROR: capture audit storage failed")
+                print("CAPTURE_AUDIT_ERROR: capture stopped; event storage failed", file=sys.stderr, flush=True)
+                return False
+
+        if not event("STARTED"):
+            return False
     try:
         scan = feed.scan()
     except Exception as exc:
-        with engine.lock:
-            engine.running = False
-            engine.error = f"FEED_ERROR: {type(exc).__name__}: {str(exc)[:180]}"
-            engine.gate = "FEED_ERROR"
-            engine.opportunities = []
+        if not engine.demo and not event("FEED_ERROR", exceptionType=type(exc).__name__):
+            return False
+        disarm("FEED_ERROR", f"FEED_ERROR: {type(exc).__name__}")
         return False
     if not engine.demo:
         try:
-            record_scan(scan, scan_dir or LIVE_SCAN_DIR)
+            archive = record_scan(scan, directory)
         except Exception as exc:
-            with engine.lock:
-                engine.running = False  # require a new explicit click after repair
-                engine.error = f"RECORD_ERROR: {type(exc).__name__}: {str(exc)[:180]}"
-                engine.gate = "RECORD_ERROR"
-                engine.opportunities = []
+            if not event("RECORD_ERROR", exceptionType=type(exc).__name__):
+                return False
+            disarm("RECORD_ERROR", f"RECORD_ERROR: {type(exc).__name__}")
             return False
-    engine.apply(scan)
+        if not event("SCAN_ARCHIVED", scanFile=archive.name):
+            return False
+    try:
+        engine.apply(scan)
+    except Exception as exc:
+        if not engine.demo and not event("ENGINE_ERROR", exceptionType=type(exc).__name__):
+            return False
+        disarm("ENGINE_ERROR", f"ENGINE_ERROR: {type(exc).__name__}")
+        return False
     return True
 
 
@@ -139,7 +189,16 @@ def make_handler(engine, token, evidence=None):
                 self.respond(200, page, "text/html; charset=utf-8")
             elif self.path == prefix + "/api/state":
                 state = engine.state()
-                state["evidence"] = evidence.read()
+                summary = dict(evidence.read())
+                if summary.get("status") == "RESEARCH_ONLY" and state.get("mode") == "LOCAL_MOOMOO_OPEND":
+                    try:
+                        report_at = datetime.fromisoformat(summary["lastAt"])
+                        latest_at = datetime.fromisoformat(engine.scan["at"])
+                        if latest_at > report_at:
+                            summary["status"] = "STALE_REPORT"
+                    except (KeyError, TypeError, ValueError):
+                        summary["status"] = "INVALID_REPORT"
+                state["evidence"] = summary
                 self.respond(200, json.dumps(state).encode())
             else:
                 self.respond(404, b'{}')
@@ -147,8 +206,26 @@ def make_handler(engine, token, evidence=None):
         def do_POST(self):
             origin = self.headers.get("Origin", "")
             expected = f"http://127.0.0.1:{self.server.server_port}"
-            if origin != expected or self.path not in (prefix + "/api/start", prefix + "/api/pause"):
+            if origin != expected or self.path not in (prefix + "/api/start", prefix + "/api/pause",
+                                                         prefix + "/api/review"):
                 self.respond(403, b'{}')
+                return
+            if self.path == prefix + "/api/review":
+                if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
+                    self.respond(415, b'{}')
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= 1024:
+                        raise ValueError("invalid review size")
+                    payload = json.loads(self.rfile.read(length))
+                    if not isinstance(payload, dict) or set(payload) != {"note"}:
+                        raise ValueError("invalid review fields")
+                    state = engine.control("review", payload["note"])
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    self.respond(400, b'{}')
+                    return
+                self.respond(200, json.dumps(state).encode())
                 return
             if self.headers.get("Content-Length") not in ("0", None):
                 self.respond(400, b'{}')

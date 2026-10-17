@@ -10,12 +10,16 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import uuid
 
 
 REQUIRED = {"source", "at", "universe", "received", "usable", "complete",
             "regular", "rows", "benchmarks", "errors", "synthetic"}
+CAPTURE_PHASES = {"STARTED", "SCAN_ARCHIVED", "FEED_ERROR", "RECORD_ERROR", "ENGINE_ERROR"}
+_SCAN_FILE = re.compile(r"[0-9]{8}T[0-9]{12}Z-[0-9a-f]{32}-[0-9a-f]{64}\.json\.gz\Z")
+_EXCEPTION_TYPE = re.compile(r"[A-Za-z_][A-Za-z_0-9]{0,79}\Z")
 
 
 def _check(scan):
@@ -85,19 +89,9 @@ def _check(scan):
             raise ValueError("Scan batches exceed listed universe")
 
 
-def record_scan(scan, directory):
-    """Atomically publish a unique compressed scan JSON; return its path.
-
-    The final filename is the manifest: its last component before ``.json`` is
-    the full SHA-256 digest of the compressed bytes on disk. A hard link publishes
-    the completed temp file with no replacement of an existing record.
-    """
-    _check(scan)
+def _publish_payload(payload, directory, recorded):
+    """Publish a checksum-named gzip JSON file without replacing existing data."""
     directory = Path(directory)
-    recorded = datetime.now(timezone.utc)
-    payload = dict(scan)
-    payload["schemaVersion"] = 2 if "directory" in scan else 1
-    payload["recordedAt"] = recorded.isoformat()
     raw = (json.dumps(payload, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
     body = gzip.compress(raw, compresslevel=6, mtime=0)
@@ -127,13 +121,75 @@ def record_scan(scan, directory):
     return final
 
 
-def read_record(path):
-    """Verify the filename digest before returning an archived scan."""
+def record_scan(scan, directory):
+    """Atomically publish a unique scan; the filename hashes compressed bytes."""
+    _check(scan)
+    recorded = datetime.now(timezone.utc)
+    payload = dict(scan)
+    payload["schemaVersion"] = 2 if "directory" in scan else 1
+    payload["recordedAt"] = recorded.isoformat()
+    return _publish_payload(payload, directory, recorded)
+
+
+def _check_capture_event(event):
+    if not isinstance(event, dict) or type(event.get("schemaVersion")) is not int or event["schemaVersion"] != 1:
+        raise ValueError("Invalid capture event schema")
+    phase = event.get("phase")
+    expected = {"schemaVersion", "attemptId", "startedAt", "recordedAt", "phase"}
+    if phase == "SCAN_ARCHIVED":
+        expected.add("scanFile")
+        if not isinstance(event.get("scanFile"), str) or not _SCAN_FILE.fullmatch(event["scanFile"]):
+            raise ValueError("Invalid archived scan reference")
+    elif phase in ("FEED_ERROR", "RECORD_ERROR", "ENGINE_ERROR"):
+        expected.add("exceptionType")
+        if (not isinstance(event.get("exceptionType"), str) or
+                not _EXCEPTION_TYPE.fullmatch(event["exceptionType"])):
+            raise ValueError("Invalid capture exception type")
+    if phase not in CAPTURE_PHASES or event.keys() != expected:
+        raise ValueError("Invalid capture event fields")
+    if not isinstance(event["attemptId"], str) or not re.fullmatch(r"[0-9a-f]{32}", event["attemptId"]):
+        raise ValueError("Invalid capture attempt identifier")
+    for key in ("startedAt", "recordedAt"):
+        if not isinstance(event[key], str):
+            raise ValueError("Invalid capture event time")
+        try:
+            stamp = datetime.fromisoformat(event[key])
+        except ValueError as exc:
+            raise ValueError("Invalid capture event time") from exc
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            raise ValueError("Capture event time requires a timezone")
+
+
+def record_capture_event(event, directory):
+    """Record one safe capture phase under ``scan_dir/attempts``.
+
+    The caller supplies only allowed metadata. Raw exception messages and feed
+    responses are intentionally rejected by the strict event schema.
+    """
+    recorded = datetime.now(timezone.utc)
+    payload = {**event, "schemaVersion": 1, "recordedAt": recorded.isoformat()}
+    _check_capture_event(payload)
+    return _publish_payload(payload, directory, recorded)
+
+
+def _read_hashed_gzip(path):
     path = Path(path)
     digest = path.name.removesuffix(".json.gz").rsplit("-", 1)[-1]
     body = path.read_bytes()
     if not path.name.endswith(".json.gz") or len(digest) != 64 or hashlib.sha256(body).hexdigest() != digest:
-        raise ValueError(f"Scan record checksum mismatch: {path.name}")
-    scan = json.loads(gzip.decompress(body).decode("utf-8"))
+        raise ValueError(f"Record checksum mismatch: {path.name}")
+    return json.loads(gzip.decompress(body).decode("utf-8"))
+
+
+def read_capture_event(path):
+    """Verify the event checksum and strict metadata schema."""
+    event = _read_hashed_gzip(path)
+    _check_capture_event(event)
+    return event
+
+
+def read_record(path):
+    """Verify the filename digest before returning an archived scan."""
+    scan = _read_hashed_gzip(path)
     _check(scan)
     return scan

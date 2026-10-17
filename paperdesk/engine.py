@@ -17,6 +17,7 @@ def valid(value):
 
 
 MARKET_TZ = ZoneInfo("America/New_York")
+PORTFOLIO_REVIEW_DRAWDOWN = 0.10
 
 
 def aware_time(value):
@@ -34,7 +35,9 @@ class PaperEngine:
         self.lock = RLock()
         self.account = {"cash": 100000.0, "positions": {}, "trades": [], "cooldowns": {},
                         "day": "", "dayStartEquity": 100000.0,
-                        "haltDay": "", "lastAppliedAt": "", "pending": []}
+                        "haltDay": "", "lastAppliedAt": "", "pending": [],
+                        "peakEquity": 100000.0, "riskReviewRequired": False,
+                        "riskReviewAt": "", "riskReviewReason": "", "riskReviewHistory": []}
         if self.path.exists():
             saved = json.loads(self.path.read_text(encoding="utf-8"))
             if saved.get("demo") != demo:
@@ -43,6 +46,15 @@ class PaperEngine:
             self.account.setdefault("cooldowns", {})
             self.account.setdefault("haltDay", "")
             self.account.setdefault("pending", [])
+            legacy_peak_unknown = "peakEquity" not in self.account
+            # Legacy accounts did not persist their historical equity peak.
+            # Preserve at least the initial and last day-start values.
+            self.account.setdefault("peakEquity", max(100000.0,
+                                                       valid(self.account.get("dayStartEquity")) or 0))
+            self.account.setdefault("riskReviewRequired", False)
+            self.account.setdefault("riskReviewAt", "")
+            self.account.setdefault("riskReviewReason", "")
+            self.account.setdefault("riskReviewHistory", [])
             if "lastAppliedAt" not in self.account:
                 seen = [aware_time(t.get("at")) for t in (self.account.get("trades")
                         if isinstance(self.account.get("trades"), list) else [])
@@ -51,13 +63,29 @@ class PaperEngine:
                 self.account["lastAppliedAt"] = (self.account["lastAppliedAt"].isoformat()
                                                  if self.account["lastAppliedAt"] else "")
             self._validate_account()
+            if legacy_peak_unknown:
+                # A prior peak cannot be reconstructed from the old account
+                # format. Require a documented review before adopting a new one.
+                self.account["riskReviewRequired"] = True
+                self.account["riskReviewReason"] = "LEGACY_PEAK_UNKNOWN"
+                self.account["riskReviewAt"] = (self.account["lastAppliedAt"] or
+                                                 datetime.now(timezone.utc).isoformat())
+            if self._equity() <= self.account["peakEquity"] * (1 - PORTFOLIO_REVIEW_DRAWDOWN):
+                self.account["riskReviewRequired"] = True
+                self.account["riskReviewAt"] = self.account["riskReviewAt"] or self.account["lastAppliedAt"]
+                self.account["riskReviewReason"] = self.account["riskReviewReason"] or "DRAWDOWN_10_PERCENT"
         self.running = False  # always require a fresh click after process start
         self.scan = None
         self.error = None
         self.opportunities = []
         self.direction = "UNKNOWN"
-        self.gate = "WAITING_FOR_SCAN"
+        self.gate = (self._review_gate() if self.account["riskReviewRequired"]
+                     else "WAITING_FOR_SCAN")
         self.updated = None
+
+    def _review_gate(self):
+        return ("LEGACY_RISK_BASELINE_REVIEW" if self.account["riskReviewReason"] == "LEGACY_PEAK_UNKNOWN"
+                else "PORTFOLIO_DRAWDOWN_REVIEW")
 
     def _validate_account(self):
         a = self.account
@@ -70,7 +98,14 @@ class PaperEngine:
                 not isinstance(a.get("cooldowns"), dict) or
                 not isinstance(a.get("day"), str) or not isinstance(a.get("haltDay"), str) or
                 not isinstance(a.get("lastAppliedAt"), str) or
-                (a["lastAppliedAt"] and not aware_time(a["lastAppliedAt"]))):
+                (a["lastAppliedAt"] and not aware_time(a["lastAppliedAt"])) or
+                type(a.get("peakEquity")) not in (int, float) or
+                valid(a.get("peakEquity")) is None or a["peakEquity"] <= 0 or
+                type(a.get("riskReviewRequired")) is not bool or
+                not isinstance(a.get("riskReviewAt"), str) or
+                not isinstance(a.get("riskReviewReason"), str) or
+                (a["riskReviewAt"] and not aware_time(a["riskReviewAt"])) or
+                not isinstance(a.get("riskReviewHistory"), list)):
             raise ValueError("Invalid paper account state")
         for code, p in a["positions"].items():
             if (not isinstance(code, str) or not isinstance(p, dict) or
@@ -95,10 +130,33 @@ class PaperEngine:
             os.fsync(output.fileno())
         os.replace(tmp, self.path)
 
-    def control(self, action):
+    def control(self, action, review_note=None):
         with self.lock:
-            if action not in ("start", "pause"):
+            if action not in ("start", "pause", "review"):
                 raise ValueError("unknown action")
+            if action == "review":
+                if not self.account["riskReviewRequired"]:
+                    raise ValueError("No portfolio drawdown review is pending")
+                if not isinstance(review_note, str) or not 10 <= len(review_note.strip()) <= 500:
+                    raise ValueError("A 10-500 character review note is required")
+                equity = self._equity()
+                if equity <= 0:
+                    raise ValueError("Cannot resume an account with no equity")
+                self.running = False
+                self.account["pending"] = []
+                self.account["riskReviewHistory"].append({
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "triggeredAt": self.account["riskReviewAt"],
+                    "reason": self.account["riskReviewReason"],
+                    "previousPeakEquity": round(self.account["peakEquity"], 2),
+                    "reviewEquity": round(equity, 2), "note": review_note.strip()})
+                self.account["peakEquity"] = equity
+                self.account["riskReviewRequired"] = False
+                self.account["riskReviewAt"] = ""
+                self.account["riskReviewReason"] = ""
+                self.gate = "REVIEW_ACKNOWLEDGED_PAUSED"
+                self.persist()
+                return self.state()
             if action == "pause":
                 # Stop in memory first: a full disk must not leave the bot live.
                 self.running = False
@@ -107,8 +165,27 @@ class PaperEngine:
                 self.account["pending"] = []
                 self.persist()
             if action == "start":
-                self.running = True
+                if self.account["riskReviewRequired"]:
+                    self.gate = self._review_gate()
+                    self.running = False
+                else:
+                    self.running = True
             return self.state()
+
+    def _check_portfolio_drawdown(self, at):
+        equity = self._equity()
+        self.account["peakEquity"] = max(self.account["peakEquity"], equity)
+        if equity <= self.account["peakEquity"] * (1 - PORTFOLIO_REVIEW_DRAWDOWN):
+            if not self.account["riskReviewRequired"]:
+                self.account["riskReviewAt"] = at.isoformat()
+                self.account["riskReviewReason"] = "DRAWDOWN_10_PERCENT"
+            self.account["riskReviewRequired"] = True
+        if self.account["riskReviewRequired"]:
+            self.running = False
+            self.account["pending"] = []
+            self.gate = self._review_gate()
+            return True
+        return False
 
     def _equity(self):
         return self.account["cash"] + sum(p["qty"] * p["last"]
@@ -204,7 +281,8 @@ class PaperEngine:
                 self.persist()
                 return
             quotes = {r.get("code"): r for r in rows if isinstance(r, dict) and r.get("code")}
-            usable = [r for r in quotes.values() if r.get("usable") and r.get("fresh")]
+            usable = [r for r in quotes.values() if r.get("usable") and r.get("fresh") and
+                      (self.demo or self._quote_current(r, at))]
             breadth = sum((valid(r.get("changePct")) or 0) > 0 for r in usable) / len(usable) if usable else 0
             bench = scan.get("benchmarks", {})
             spy = bench.get("SPY", {})
@@ -275,6 +353,7 @@ class PaperEngine:
                 self.account["haltDay"] = day
             if self.account["haltDay"] == day and self.gate == "READY":
                 self.gate = "DAILY_LOSS_LIMIT"
+            self._check_portfolio_drawdown(at)
             # A quote cannot become a paper fill unless this scan passed every gate.
             if (not self.running or self.gate in ("OUTSIDE_REGULAR_SESSION",
                                                  "BENCHMARK_QUOTES_MISSING_OR_STALE") or
@@ -285,6 +364,9 @@ class PaperEngine:
             now = at
             if not self.demo:
                 self._process_pending(quotes, candidates, at, day)
+                if self._check_portfolio_drawdown(at):
+                    self.persist()
+                    return
                 if self._equity() < self.account["dayStartEquity"] * 0.98:
                     self.account["haltDay"] = day
                     self.gate = "DAILY_LOSS_LIMIT"
@@ -333,6 +415,9 @@ class PaperEngine:
                 if reason:
                     self._fill(code, position["qty"], quote, "SELL", reason, at.isoformat())
             equity = self._equity()
+            if self._check_portfolio_drawdown(at):
+                self.persist()
+                return
             if equity < self.account["dayStartEquity"] * 0.98:
                 self.account["haltDay"] = day
             daily_loss = self.account["haltDay"] == day
@@ -353,11 +438,13 @@ class PaperEngine:
                     qty = int(budget / (execution[0] * 1.0002))
                     if qty > 0:
                         self._fill(code, qty, quote, "BUY", "MOMENTUM_SCREEN", at.isoformat())
+                        if self._check_portfolio_drawdown(at):
+                            break
             self.persist()
 
     def _quote_current(self, quote, at):
         source = aware_time(quote.get("sourceAsOf"))
-        return bool(source and -5 <= (at - source).total_seconds() <= 180 and
+        return bool(source and 0 <= (at - source).total_seconds() <= 180 and
                     source.astimezone(MARKET_TZ).date() == at.astimezone(MARKET_TZ).date())
 
     def _exit_reason(self, position, quote, at):
@@ -424,6 +511,11 @@ class PaperEngine:
                     "opportunities": self.opportunities,
                     "account": {"cash": round(self.account["cash"], 2),
                                 "equity": round(self._equity(), 2),
+                                "peakEquity": round(self.account["peakEquity"], 2),
+                                "drawdownPct": round((self._equity() / self.account["peakEquity"] - 1) * 100, 2),
+                                "riskReviewRequired": self.account["riskReviewRequired"],
+                                "riskReviewAt": self.account["riskReviewAt"],
+                                "riskReviewReason": self.account["riskReviewReason"],
                                 "dayStartEquity": self.account["dayStartEquity"],
                                 "positions": self.account["positions"],
                                 "pending": self.account["pending"],
