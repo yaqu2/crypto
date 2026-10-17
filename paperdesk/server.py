@@ -2,6 +2,7 @@
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 from pathlib import Path
 import secrets
 import socket
@@ -15,6 +16,78 @@ from .record import record_scan
 
 
 LIVE_SCAN_DIR = Path("data/paperdesk/scans")
+DEFAULT_EVIDENCE_REPORT = Path("data/paperdesk/eval.json")
+
+
+class EvidenceReader:
+    """Expose only a small, explicitly unverified summary of a local report."""
+
+    def __init__(self, path=DEFAULT_EVIDENCE_REPORT):
+        self.path = Path(path)
+        self.lock = threading.Lock()
+        self._version = None
+        self._summary = {"status": "NOT_EVALUATED"}
+
+    def read(self):
+        with self.lock:
+            try:
+                stat = self.path.stat()
+            except FileNotFoundError:
+                self._version = None
+                self._summary = {"status": "NOT_EVALUATED"}
+                return self._summary
+            version = (stat.st_mtime_ns, stat.st_size)
+            if version == self._version:
+                return self._summary
+            self._version = version
+            if stat.st_size > 32 * 1024 * 1024:
+                self._summary = {"status": "INVALID_REPORT"}
+                return self._summary
+            try:
+                report = json.loads(self.path.read_text(encoding="utf-8"))
+                if not isinstance(report, dict) or report.get("status") not in ("NO_GO", "RESEARCH_ONLY"):
+                    raise ValueError("unexpected evaluation status")
+                sample = report.get("sample") or {}
+                train = report.get("train") or {}
+                holdout = report.get("holdout") or {}
+                stress = report.get("holdoutStress") or {}
+                if not all(isinstance(x, dict) for x in (sample, train, holdout, stress)):
+                    raise ValueError("invalid evaluation summary")
+
+                def finite(value):
+                    return value if type(value) in (int, float) and math.isfinite(value) else None
+
+                reasons = report.get("reasons")
+                if report["status"] == "RESEARCH_ONLY":
+                    days = finite(sample.get("regularTradingDays"))
+                    holdout_days = finite(sample.get("holdoutTradingDays"))
+                    holdout_trades = finite(holdout.get("completedRoundTrips"))
+                    train_trades = finite(train.get("completedRoundTrips"))
+                    result = finite(holdout.get("netReturnPct"))
+                    spy = finite(holdout.get("spyNetReturnPct"))
+                    stressed = finite(stress.get("netReturnPct"))
+                    coverage = finite(sample.get("completeFreshScanFraction"))
+                    full_days = finite(sample.get("fullSessionDays"))
+                    if (reasons or None in (days, holdout_days, holdout_trades, train_trades,
+                                            result, spy, stressed, coverage, full_days) or
+                            days < 60 or holdout_days < 20 or holdout_trades < 30 or
+                            train_trades + holdout_trades < 100 or coverage < .95 or
+                            full_days / days < .95 or result <= 0 or result <= spy or stressed <= 0):
+                        raise ValueError("research status contradicts reported gates")
+                self._summary = {
+                    "status": report["status"],
+                    "reasons": [str(reason)[:100] for reason in reasons[:5]] if isinstance(reasons, list) else [],
+                    "regularDays": finite(sample.get("regularTradingDays")),
+                    "holdoutDays": finite(sample.get("holdoutTradingDays")),
+                    "completedRoundTrips": finite(holdout.get("completedRoundTrips")),
+                    "holdoutReturnPct": finite(holdout.get("netReturnPct")),
+                    "spyReturnPct": finite(holdout.get("spyNetReturnPct")),
+                    "stressReturnPct": finite(stress.get("netReturnPct")),
+                    "lastAt": str(sample.get("lastAt") or "")[:40],
+                }
+            except (OSError, ValueError, UnicodeError, TypeError):
+                self._summary = {"status": "INVALID_REPORT"}
+            return self._summary
 
 
 def capture_and_apply(feed, engine, scan_dir=None):
@@ -42,9 +115,10 @@ def capture_and_apply(feed, engine, scan_dir=None):
     return True
 
 
-def make_handler(engine, token):
+def make_handler(engine, token, evidence=None):
     prefix = f"/t/{token}"
     page = (Path(__file__).parent / "dashboard.html").read_bytes()
+    evidence = evidence or EvidenceReader()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -64,7 +138,9 @@ def make_handler(engine, token):
             if self.path == prefix + "/":
                 self.respond(200, page, "text/html; charset=utf-8")
             elif self.path == prefix + "/api/state":
-                self.respond(200, json.dumps(engine.state()).encode())
+                state = engine.state()
+                state["evidence"] = evidence.read()
+                self.respond(200, json.dumps(state).encode())
             else:
                 self.respond(404, b'{}')
 
@@ -83,10 +159,11 @@ def make_handler(engine, token):
     return Handler
 
 
-def serve(feed, engine, port=0, browser=True, interval=None, scan_dir=None):
+def serve(feed, engine, port=0, browser=True, interval=None, scan_dir=None, evidence_path=DEFAULT_EVIDENCE_REPORT):
     token = secrets.token_urlsafe(24)
     interval = interval or (3 if engine.demo else 90)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(engine, token))
+    server = ThreadingHTTPServer(("127.0.0.1", port),
+                                 make_handler(engine, token, EvidenceReader(evidence_path)))
     server.daemon_threads = True
     stop = threading.Event()
 
@@ -126,6 +203,8 @@ def main():
     parser.add_argument("--state", type=Path)
     parser.add_argument("--scan-dir", type=Path, default=LIVE_SCAN_DIR,
                         help="live OpenD scan archive directory (one gzip JSON per scan)")
+    parser.add_argument("--evidence-report", type=Path, default=DEFAULT_EVIDENCE_REPORT,
+                        help="optional local intraday evaluation JSON to summarize in the dashboard")
     args = parser.parse_args()
     if not args.demo:
         try:
@@ -136,7 +215,8 @@ def main():
     feed = DemoFeed() if args.demo else MoomooFeed()
     state = args.state or Path("data/paperdesk/demo.json" if args.demo else "data/paperdesk/live.json")
     engine = PaperEngine(state, demo=args.demo)
-    serve(feed, engine, args.port, not args.no_browser, scan_dir=args.scan_dir)
+    serve(feed, engine, args.port, not args.no_browser,
+          scan_dir=args.scan_dir, evidence_path=args.evidence_report)
 
 
 if __name__ == "__main__":
