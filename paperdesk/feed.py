@@ -1,5 +1,7 @@
 """Read-only quote feeds. The demo is synthetic and always identified as such."""
 from datetime import datetime, timezone
+import hashlib
+import json
 import math
 import random
 
@@ -56,12 +58,21 @@ class MoomooFeed:
         from feed_guard import clock_state
         started = datetime.now(timezone.utc)
         universe = get_universe(self.ctx, self.market, self.stock_type, self.ok)
+        directory_completed = datetime.now(timezone.utc)
         listed = [item for item in universe if exchange_scope(item.get("exchange")) == "US_PRIMARY_LISTED"]
         errors, denials, quotes = [], [], []
+        batches = []
         pacer = SnapshotPacer(self.ctx, 1.1, 100)
         for offset in range(0, len(listed), 400):
-            quotes.extend(fetch_batch(pacer, [x["code"] for x in listed[offset:offset + 400]],
-                                      self.ok, offset, errors, denials))
+            requested = [x["code"] for x in listed[offset:offset + 400]]
+            batch_started = datetime.now(timezone.utc)
+            calls_before = pacer.calls
+            returned = fetch_batch(pacer, requested, self.ok, offset, errors, denials)
+            quotes.extend(returned)
+            batches.append({"offset": offset, "requested": len(requested),
+                            "received": len(returned), "apiCalls": pacer.calls - calls_before,
+                            "startedAt": batch_started.isoformat(),
+                            "completedAt": datetime.now(timezone.utc).isoformat()})
             if pacer.calls >= pacer.max_calls and offset + 400 < len(listed):
                 errors.append({"reason": "SNAPSHOT_REQUEST_BUDGET_EXCEEDED"})
                 break
@@ -82,9 +93,16 @@ class MoomooFeed:
         names = {x["code"]: x["name"] for x in listed}
         for row in quotes:
             row["name"] = names.get(row["code"], row["code"])
+        directory_bytes = json.dumps(universe, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode("utf-8")
         return {"source": self.label, "at": ended.isoformat(),
                 "universe": len(listed), "received": summary["listedSnapshotCount"],
                 "usable": summary["listedFreshUsableCount"],
                 "complete": bool(summary["fullListedUniverse"] and len(listed) >= 2000),
                 "regular": clock_state(ended)["regular"], "rows": quotes,
-                "benchmarks": benchmarks, "errors": errors + denials, "synthetic": False}
+                "benchmarks": benchmarks, "errors": errors + denials, "synthetic": False,
+                "scanStartedAt": started.isoformat(),
+                "directoryCompletedAt": directory_completed.isoformat(),
+                "directory": universe,
+                "directorySha256": hashlib.sha256(directory_bytes).hexdigest(),
+                "batches": batches}

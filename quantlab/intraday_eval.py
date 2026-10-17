@@ -148,23 +148,37 @@ def _rows(scan):
             isinstance(r.get("code"), str) and _quote_ok(r, scan["_at"])}
 
 
-def _signals(scan, rows, positions, cooldowns):
+def _market_bull(scan, rows):
     spy, qqq = (scan["benchmarks"][x] for x in ("SPY", "QQQ"))
     bench_up = all((_number(r.get("changePct")) or 0) > 0.2 for r in (spy, qqq))
     breadth = sum((_number(r.get("changePct")) or 0) > 0 for r in rows.values()) / len(rows) if rows else 0
-    bull = bench_up and breadth > 0.52
+    return bench_up and breadth > 0.52
+
+
+def _ranked_picks(rows):
+    """Match PaperEngine's complete ranked candidate list using the actual BBO."""
     picks = []
-    if bull:
-        for code, row in rows.items():
-            price, change, turnover, spread = (_number(row.get(k)) for k in
-                                               ("lastPrice", "changePct", "turnover", "spreadBps"))
-            if (None in (price, change, turnover, spread) or not 5 <= price <= 500 or
-                    not 1 <= change <= 8 or turnover < 5_000_000 or spread > 30 or
-                    code in positions or code in cooldowns):
-                continue
-            score = change * 10 + min(turnover / 10_000_000, 20) - spread / 10
-            picks.append((-score, code))
-        picks.sort()
+    for code, row in rows.items():
+        price, change, turnover = (_number(row.get(k)) for k in
+                                   ("lastPrice", "changePct", "turnover"))
+        bbo = _bbo(row)
+        if price is None or change is None or turnover is None or bbo is None:
+            continue
+        bid, ask = bbo
+        spread = (ask - bid) / ((ask + bid) / 2) * 10_000
+        if (not 5 <= price <= 500 or not 1 <= change <= 8 or
+                turnover < 5_000_000 or spread > 30 or
+                not bid * .98 <= price <= ask * 1.02):
+            continue
+        score = round(change * 10 + min(turnover / 10_000_000, 20) - spread / 10, 2)
+        picks.append((-score, code))
+    picks.sort()
+    return [code for _, code in picks]
+
+
+def _signals(scan, rows, positions, cooldowns):
+    bull = _market_bull(scan, rows)
+    picks = _ranked_picks(rows) if bull else []
     exits = []
     for code, p in positions.items():
         row = rows.get(code)
@@ -174,10 +188,13 @@ def _signals(scan, rows, positions, cooldowns):
         peak = max(p["peak"], price)
         p["peak"] = peak
         age = (scan["_at"] - p["opened"]).total_seconds()
-        if (price <= p["entry"] * .97 or price <= peak * .98 or
-                price >= p["entry"] * 1.05 or age >= 172800 or not bull):
+        bbo = _bbo(row)
+        exit_price = min(price, bbo[0]) if bbo else None
+        if exit_price is not None and (
+                exit_price <= p["entry"] * .97 or exit_price <= peak * .98 or
+                exit_price >= p["entry"] * 1.05 or age >= 172800 or not bull):
             exits.append(code)
-    return exits, [code for _, code in picks[:12]], bull
+    return exits, [code for code in picks if code not in positions and code not in cooldowns], bull
 
 
 def _segment(scans, *, slippage_bps=SIDE_SLIPPAGE_BPS, fee_bps=SIDE_FEE_BPS):
@@ -209,6 +226,8 @@ def _segment(scans, *, slippage_bps=SIDE_SLIPPAGE_BPS, fee_bps=SIDE_FEE_BPS):
             day_halted = False
         good = _scan_ok(scan)
         rows = _rows(scan) if good else {}
+        current_bull = _market_bull(scan, rows) if good else False
+        current_candidates = set(_ranked_picks(rows)) if current_bull else set()
         next_round = previous is not None and 0 < (at - previous).total_seconds() <= MAX_EXECUTION_GAP_SECONDS
         if good:
             spy_bbo = _bbo(scan["benchmarks"]["SPY"])
@@ -246,7 +265,8 @@ def _segment(scans, *, slippage_bps=SIDE_SLIPPAGE_BPS, fee_bps=SIDE_FEE_BPS):
                     break
                 row = rows.get(code)
                 bbo = _bbo(row)
-                if (bbo is None or code in positions or code in cooldowns or
+                if (bbo is None or not current_bull or code not in current_candidates or
+                        code in positions or code in cooldowns or
                         not _quote_after(row, previous)):
                     missed += 1
                     continue

@@ -11,7 +11,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 from paperdesk.engine import PaperEngine
-from paperdesk.feed import DemoFeed
+from paperdesk.feed import DemoFeed, MoomooFeed
 from paperdesk.record import read_record, record_scan
 from paperdesk.server import capture_and_apply
 
@@ -162,6 +162,66 @@ class ScanRecordTest(unittest.TestCase):
         self.assertEqual(len(records), 2)
         self.assertTrue(all(read_record(path)["source"] == "LOCAL_MOOMOO_OPEND"
                             for path in records))
+
+    def test_real_feed_archives_directory_classification_and_batch_provenance(self):
+        import sys
+        from pathlib import Path as SystemPath
+
+        flowdesk = str(SystemPath(__file__).resolve().parents[1] / "flowdesk")
+        if flowdesk not in sys.path:
+            sys.path.insert(0, flowdesk)
+        import market_scan
+        testcase = self
+
+        class Frame:
+            def __init__(self, codes):
+                self.codes = codes
+
+            def to_dict(self, mode):
+                testcase.assertEqual(mode, "records")
+                return [{"code": code} for code in self.codes]
+
+        class Client:
+            def get_market_snapshot(self, codes):
+                return 0, Frame(codes)
+
+        feed = MoomooFeed.__new__(MoomooFeed)
+        feed.ctx, feed.ok, feed.market, feed.stock_type = Client(), 0, object(), object()
+        directory = [
+            {"code": "US.A", "name": "A", "exchange": "US_NYSE", "securityType": "STOCK"},
+            {"code": "US.B", "name": "B", "exchange": "US_NASDAQ", "securityType": "STOCK"},
+            {"code": "US.C", "name": "C", "exchange": "US_PINK", "securityType": "STOCK"},
+        ]
+
+        def normalize(raw, now):
+            return {"code": raw["code"], "usable": True, "fresh": True,
+                    "changePct": 1.0, "sourceAsOf": now.isoformat()}
+
+        with patch.object(market_scan, "get_universe", return_value=directory), patch.object(
+                market_scan, "normalize_snapshot", side_effect=normalize), patch.object(
+                market_scan.time, "sleep"):
+            scan = feed.scan()
+        self.assertEqual([row["code"] for row in scan["rows"]], ["US.A", "US.B"])
+        self.assertEqual(scan["universe"], 2)
+        self.assertEqual([item["exchange"] for item in scan["directory"]],
+                         ["US_NYSE", "US_NASDAQ", "US_PINK"])
+        self.assertEqual(scan["batches"][0]["offset"], 0)
+        self.assertEqual(scan["batches"][0]["requested"], 2)
+        self.assertEqual(scan["batches"][0]["received"], 2)
+        self.assertEqual(scan["batches"][0]["apiCalls"], 1)
+        archived = read_record(record_scan(scan, self.root / "scans"))
+        self.assertEqual(archived["schemaVersion"], 2)
+        self.assertEqual(archived["directory"], directory)
+        self.assertEqual(archived["batches"], scan["batches"])
+
+        malformed = copy.deepcopy(scan)
+        malformed["batches"][0]["offset"] = 1
+        with self.assertRaisesRegex(ValueError, "batch range"):
+            record_scan(malformed, self.root / "scans")
+        malformed = copy.deepcopy(scan)
+        malformed["directory"][0]["exchange"] = "US_PINK"
+        with self.assertRaisesRegex(ValueError, "directory checksum"):
+            record_scan(malformed, self.root / "scans")
 
 
 if __name__ == "__main__":

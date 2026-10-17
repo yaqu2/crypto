@@ -1,6 +1,6 @@
 # 美股量化研究工作区
 
-盈利能力的验证标准、数据门禁和团队分工见 [VALIDATION.md](VALIDATION.md)。当前尚无足够真实盘中样本证明 PaperDesk 策略盈利；演示成交不能作为此证据。
+研究团队的职责、第一轮可否证实验和当前证据状态见 [RESEARCH_TEAM.md](RESEARCH_TEAM.md)；盈利能力的验证标准与数据门禁见 [VALIDATION.md](VALIDATION.md)。当前尚无足够真实盘中样本证明 PaperDesk 策略盈利；演示成交不能作为此证据。
 
 本仓库以用户提供的研究归档为依据，提供美股研究与本地模拟交易路径：
 
