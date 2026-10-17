@@ -20,6 +20,16 @@ python3 -m venv .venv
 
 ## 美股日频回测
 
+### 从本机 OpenD 导出历史日线
+
+Moomoo OpenD 在用户 Mac 的 `127.0.0.1:11111` 运行；云环境的同一地址不是用户 Mac。仓库的 `tools/moomoo_history.py` 只调用官方 SDK 的历史 K 线与除权信息接口，不访问账户或下单接口。需在**运行并登录 OpenD 的同一台 Mac** 上执行，且 Mac Python 已安装 `flowdesk/requirements.txt`：
+
+```bash
+python3 tools/moomoo_history.py --codes AAPL,MSFT,NVDA,SPY --start 2023-01-01 --end 2026-10-16 --out /path/to/moomoo_history.csv
+```
+
+导出器保存未复权开盘/收盘、前复权收盘、拆股比例及现金分红，并附带来源与 SHA-256 说明文件。它会在无法连接、历史页缺失、原始/复权日期不一致或遇到尚未建模的公司行动时停止。不要将 Mac 的 OpenD 端口公开到互联网。**导出文件还不包含历史股票池资格**；Moomoo 当前股票目录不能证明某只股票在过去某日属于可选池。上传导出文件及原 usquant 历史股票池后，才能组装完整 Top-50 回测输入。若只用当下观察池，结果须标为静态观察池探索，不能称为原策略全市场复现。
+
 输入 CSV 每行是一只股票在一个美股交易日的记录：
 
 ```csv
